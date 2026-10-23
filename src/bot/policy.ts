@@ -2,11 +2,12 @@ import type { GameMap, Vec2 } from '../game/types'
 import { isWalkable } from '../game/map'
 import { tileDistance } from '../game/logic'
 import { lineOfSight } from '../game/los'
-import { rollDamage, type DamageDice, type Rng } from '../combat/dice'
+import { rollDamage, rollDie, type DamageDice, type Rng } from '../combat/dice'
+import { profBonus } from '../character/progression'
 import { resolveAttack, resolveAreaAttack, combatMode } from '../combat/resolve'
 import { addCondition, hasCondition, type Battler, type CombatAttack } from '../combat/types'
 import { findEffect } from '../combat/subclasses'
-import { bardicDie } from '../combat/abilities'
+import { bardicDie, wildShapeForm } from '../combat/abilities'
 import type { Genes } from './genome'
 import type { UsageTally } from './usage'
 
@@ -26,6 +27,10 @@ import type { UsageTally } from './usage'
 // a policy coin-flip never shifts the dice sequence.
 // Pure apart from mutating the battlers and advancing the two RNGs.
 // ---------------------------------------------------------------------------
+
+/** What the bot's action did this turn (telemetry): an attack, a heal, a
+ *  retreat, only movement, or nothing at all. */
+export type TurnKind = 'attack' | 'heal' | 'ability' | 'retreat' | 'move' | 'idle'
 
 /** Bardic Inspiration reaches a creature within 60 ft. */
 const INSPIRE_RANGE = 12
@@ -189,12 +194,21 @@ function bestBurstTarget(cands: Battler[], battlers: Battler[], radius: number):
   return best
 }
 
+/** The lowest slot level that can cast `a` (a spell may use any higher slot —
+ *  e.g. a warlock's 3rd-level Pact Magic slots cast 1st/2nd-level spells). */
+function castingSlotIndex(bot: Battler, a: CombatAttack): number {
+  const slots = bot.spellSlots ?? []
+  for (let i = (a.slotLevel ?? 1) - 1; i < slots.length; i++) if ((slots[i] ?? 0) > 0) return i
+  return -1
+}
+
 function slotAvailable(bot: Battler, a: CombatAttack): boolean {
-  return !!bot.spellSlots && (bot.spellSlots[(a.slotLevel ?? 1) - 1] ?? 0) > 0
+  return castingSlotIndex(bot, a) >= 0
 }
 
 function spendSlot(bot: Battler, a: CombatAttack): void {
-  if (bot.spellSlots) bot.spellSlots[(a.slotLevel ?? 1) - 1] -= 1
+  const i = castingSlotIndex(bot, a)
+  if (i >= 0 && bot.spellSlots) bot.spellSlots[i] -= 1
 }
 
 function makeAttack(rng: Rng, bot: Battler, atk: CombatAttack, target: Battler, battlers: Battler[], rec: (label: string) => void): void {
@@ -204,7 +218,7 @@ function makeAttack(rng: Rng, bot: Battler, atk: CombatAttack, target: Battler, 
   }
   rec(atk.name)
   if (atk.area) resolveAreaAttack(rng, bot, atk, target.pos, battlers, atk.area)
-  else resolveAttack(rng, bot, atk, target, combatMode(bot, target, atk))
+  else resolveAttack(rng, bot, atk, target, combatMode(bot, target, atk), battlers)
 }
 
 /** Healing from a heal action, with the Life domain bonus. */
@@ -226,9 +240,9 @@ export function botPlayerTurn(
   decide: Rng,
   genes: Genes,
   tally?: UsageTally,
-): void {
+): TurnKind {
   try {
-    playTurn(bot, battlers, map, rng, decide, genes, tally)
+    return playTurn(bot, battlers, map, rng, decide, genes, tally)
   } finally {
     // A Frenzy swing not spent this turn (e.g. a ranged turn) is lost.
     bot.frenzyAttackPending = false
@@ -241,10 +255,10 @@ function inspireTarget(bot: Battler, battlers: Battler[]): Battler | undefined {
   return nearest(bot.pos, cands)
 }
 
-function playTurn(bot: Battler, battlers: Battler[], map: GameMap, rng: Rng, decide: Rng, genes: Genes, tally?: UsageTally): void {
-  if (bot.hp <= 0) return
+function playTurn(bot: Battler, battlers: Battler[], map: GameMap, rng: Rng, decide: Rng, genes: Genes, tally?: UsageTally): TurnKind {
+  if (bot.hp <= 0) return 'idle'
   const enemies = livingEnemies(battlers)
-  if (enemies.length === 0) return
+  if (enemies.length === 0) return 'idle'
   const bossFight = enemies.some((e) => e.role === 'boss')
   const rec = (label: string): void => {
     if (tally) tally[label] = (tally[label] ?? 0) + 1
@@ -262,7 +276,7 @@ function playTurn(bot: Battler, battlers: Battler[], map: GameMap, rng: Rng, dec
   const reserveSlots = decide() < genes.slotReserve
   const regroupNow = decide() < genes.regroup
   const rangedStance = decide() < effKite
-  const res = bot.resources ?? { rage: 0, secondWind: 0, actionSurge: 0, inspiration: 0 }
+  const res = bot.resources ?? { rage: 0, secondWind: 0, actionSurge: 0, inspiration: 0, wildShape: 0 }
 
   let movement = hasCondition(bot, 'restrained') ? 0 : bot.speedTiles
   const adjCount = (): number => adjacentFoes(bot.pos, battlers)
@@ -292,6 +306,11 @@ function playTurn(bot: Battler, battlers: Battler[], map: GameMap, rng: Rng, dec
       rec('Patient Defense')
       return
     }
+    // Monk Martial Arts: an unarmed strike as a bonus action after attacking.
+    if ((bot.classLevels?.monk ?? 0) > 0) {
+      martialArts = true
+      return
+    }
     if (has(bot, 'inspire') && res.inspiration > 0 && genes.inspireBeforeAttack) {
       const ally = inspireTarget(bot, battlers)
       if (ally) {
@@ -303,17 +322,36 @@ function playTurn(bot: Battler, battlers: Battler[], map: GameMap, rng: Rng, dec
       }
     }
     if (has(bot, 'cunning-dash')) {
+      // Cunning Action: Hide when a foe is already within reach of an attack
+      // (a hidden attacker has advantage, which enables Sneak Attack), else Dash.
+      const reach = Math.max(1, ...bot.attacks.filter((a) => (a.source ?? 'weapon') === 'weapon').map((a) => a.range))
+      if (livingEnemies(battlers).some((e) => tileDistance(bot.pos, e.pos) <= reach && lineOfSight(map, bot.pos, e.pos))) {
+        const perception = Math.max(...livingEnemies(battlers).map((e) => e.passivePerception ?? 10))
+        const stealth = rollDie(rng, 20) + (bot.initiativeMod) + 2 * profBonus(bot.charLevel ?? 1) // Expertise
+        if (stealth > perception) addCondition(bot, 'hidden')
+        rec('Hide')
+        return
+      }
       movement += bot.speedTiles
       rec('Cunning Action')
     }
   }
+  let martialArts = false
+  bot.sneakAttackUsed = false
+  bot.colossusSlayerUsed = false
   bonusAction()
 
-  const healSpell = (range: number): CombatAttack | undefined =>
-    bot.attacks.find((a) => a.source === 'heal' && !!a.heal && a.range >= range && slotAvailable(bot, a))
+  // The strongest usable heal that reaches (Cure Wounds over Healing Word on
+  // yourself; Healing Word when only it reaches an ally).
+  const healSpell = (range: number): CombatAttack | undefined => {
+    const usableHeals = bot.attacks.filter((a) => a.source === 'heal' && !!a.heal && a.range >= range && slotAvailable(bot, a))
+    let best: CombatAttack | undefined
+    for (const h of usableHeals) if (!best || avg(h.heal!) > avg(best.heal!)) best = h
+    return best
+  }
 
   // --- Heal self below the threshold (spell / potion order per genes) ---
-  if (bot.hp < bot.maxHp * genes.healAtHpFrac) {
+  if (bot.hp < bot.maxHp * genes.healAtHpFrac && !bot.wildShape) {
     const tryPotion = (): boolean => {
       if ((bot.potions ?? 0) <= 0) return false
       bot.potions = (bot.potions ?? 0) - 1
@@ -330,11 +368,11 @@ function playTurn(bot: Battler, battlers: Battler[], map: GameMap, rng: Rng, dec
       return true
     }
     const healed = genes.potionFirst ? tryPotion() || trySpell() : trySpell() || tryPotion()
-    if (healed) return
+    if (healed) return 'heal'
   }
 
   // --- Support: mend the most-wounded ally within the spell's range ---
-  if (genes.healAllies > 0.45) {
+  if (genes.healAllies > 0.45 && !bot.wildShape) {
     const ally = mostWounded(livingAllies(battlers, bot.id))
     if (ally && ally.hp < ally.maxHp * (0.35 + genes.healAllies * 0.4)) {
       const h = healSpell(tileDistance(bot.pos, ally.pos))
@@ -342,13 +380,30 @@ function playTurn(bot: Battler, battlers: Battler[], map: GameMap, rng: Rng, dec
         spendSlot(bot, h)
         ally.hp = Math.min(ally.maxHp, ally.hp + healAmount(rng, bot, h))
         rec(`${h.name} (ally)`)
-        return
+        return 'heal'
       }
     }
   }
 
-  // --- Retreat when critically low and unable to heal ---
-  if (bot.hp < bot.maxHp * effRetreatFrac) {
+  // --- Druid Wild Shape (an action): take beast form while uses remain. The
+  // form's HP soaks damage first; in form the druid fights with the beast's
+  // attacks and cannot cast.
+  const druidLevel = bot.classLevels?.druid ?? 0
+  if (!bot.wildShape && res.wildShape > 0 && druidLevel >= 2) {
+    const form = wildShapeForm(druidLevel)
+    if (form) {
+      bot.wildShape = { form, hp: form.hp, formerAc: bot.ac }
+      bot.ac = form.ac
+      res.wildShape -= 1
+      rec(`Wild Shape (${form.name})`)
+      return 'ability'
+    }
+  }
+
+  // --- Retreat when critically low and unable to heal — but only toward a
+  // living ally who can cover. With no opportunity attacks and no way to leave
+  // a fight, a lone bot that backs off just gets chased and loses its action.
+  if (bot.hp < bot.maxHp * effRetreatFrac && livingAllies(battlers, bot.id).length > 0) {
     rec('Retreat')
     const ally = regroupNow ? nearest(bot.pos, livingAllies(battlers, bot.id)) : undefined
     while (movement > 0) {
@@ -361,13 +416,15 @@ function playTurn(bot: Battler, battlers: Battler[], map: GameMap, rng: Rng, dec
       bot.pos = next
       movement--
     }
-    return
+    return 'retreat'
   }
 
   // --- Attack: only options the bot can pay for (a leveled spell needs a slot). ---
   const usable = (a: CombatAttack): boolean => a.source !== 'spell' || slotAvailable(bot, a)
-  const damaging = bot.attacks.filter((a) => a.source !== 'heal' && (a.damage.count > 0 || a.damage.bonus > 0) && usable(a))
-  if (damaging.length === 0) return
+  const kit = bot.wildShape ? [bot.wildShape.form.attack] : bot.attacks
+  const perAction = Math.max(1, bot.wildShape?.form.attacksPerAction ?? bot.attacksPerAction)
+  const damaging = kit.filter((a) => a.source !== 'heal' && (a.damage.count > 0 || a.damage.bonus > 0) && usable(a))
+  if (damaging.length === 0) return 'idle'
   // Slot reserve: hold leveled spells for the boss.
   let pool = damaging
   if (reserveSlots && !bossFight) {
@@ -419,7 +476,7 @@ function playTurn(bot: Battler, battlers: Battler[], map: GameMap, rng: Rng, dec
       const target = r.area ? bestBurstTarget(cands, battlers, r.area) : pick(cands)
       makeAttack(rng, bot, r, target, battlers, rec)
     }
-    return
+    return cands.length > 0 ? 'attack' : 'move'
   }
 
   // Melee: close to an adjacent foe and swing (Extra Attack + Action Surge).
@@ -440,7 +497,7 @@ function playTurn(bot: Battler, battlers: Battler[], map: GameMap, rng: Rng, dec
     return true
   }
   let any = false
-  for (let i = 0; i < Math.max(1, bot.attacksPerAction); i++) {
+  for (let i = 0; i < perAction; i++) {
     if (!swing()) break
     any = true
   }
@@ -450,7 +507,7 @@ function playTurn(bot: Battler, battlers: Battler[], map: GameMap, rng: Rng, dec
     if (adj.length > 0 && (genes.actionSurgeEarly || lowAdj)) {
       res.actionSurge -= 1
       rec('Action Surge')
-      for (let i = 0; i < Math.max(1, bot.attacksPerAction); i++) if (!swing()) break
+      for (let i = 0; i < perAction; i++) if (!swing()) break
     }
   }
   // Berserker Frenzy: the bonus-action swing fires once after the Attack action.
@@ -458,4 +515,6 @@ function playTurn(bot: Battler, battlers: Battler[], map: GameMap, rng: Rng, dec
     bot.frenzyAttackPending = false
     swing()
   }
+  if (any && martialArts) swing()
+  return any ? 'attack' : 'move'
 }

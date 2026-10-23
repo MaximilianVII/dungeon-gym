@@ -112,7 +112,7 @@ describe('kite is a per-turn probability (A-9)', () => {
 describe('class resources recharge on rests (A-12)', () => {
   it('follow the SRD 5.1 tables', () => {
     expect([1, 2, 3, 6, 12, 17, 20].map(rageUses)).toEqual([2, 2, 3, 4, 5, 6, 99])
-    expect(maxResources({ fighter: 5 }, 10)).toEqual({ rage: 0, secondWind: 1, actionSurge: 1, inspiration: 0 })
+    expect(maxResources({ fighter: 5 }, 10)).toEqual({ rage: 0, secondWind: 1, actionSurge: 1, inspiration: 0, wildShape: 0 })
     expect(maxResources({ fighter: 17 }, 10).actionSurge).toBe(2)
     expect(maxResources({ fighter: 1 }, 10).actionSurge).toBe(0)
     expect(maxResources({ barbarian: 5 }, 10).rage).toBe(3)
@@ -122,8 +122,8 @@ describe('class resources recharge on rests (A-12)', () => {
   })
 
   it('short rests restore Second Wind / Action Surge (and inspiration from bard 5); long rests restore all', () => {
-    const empty = { rage: 0, secondWind: 0, actionSurge: 0, inspiration: 0 }
-    expect(restoreResources(empty, { barbarian: 3, fighter: 2 }, 10, false)).toEqual({ rage: 0, secondWind: 1, actionSurge: 1, inspiration: 0 })
+    const empty = { rage: 0, secondWind: 0, actionSurge: 0, inspiration: 0, wildShape: 0 }
+    expect(restoreResources(empty, { barbarian: 3, fighter: 2 }, 10, false)).toEqual({ rage: 0, secondWind: 1, actionSurge: 1, inspiration: 0, wildShape: 0 })
     expect(restoreResources(empty, { barbarian: 3 }, 10, true).rage).toBe(3)
     expect(restoreResources(empty, { bard: 4 }, 16, false).inspiration).toBe(0)
     expect(restoreResources(empty, { bard: 5 }, 16, false).inspiration).toBe(3)
@@ -211,7 +211,7 @@ describe('Bardic Inspiration goes to an ally (A-20)', () => {
   })
 
   it('Cutting Words spends a Bardic Inspiration use', () => {
-    const bard = mkBattler({ team: 'player', subclass: 'lore', classLevels: { bard: 5 }, ac: 20, hp: 30, maxHp: 30, resources: { rage: 0, secondWind: 0, actionSurge: 0, inspiration: 1 } })
+    const bard = mkBattler({ team: 'player', subclass: 'lore', classLevels: { bard: 5 }, ac: 20, hp: 30, maxHp: 30, resources: { rage: 0, secondWind: 0, actionSurge: 0, inspiration: 1, wildShape: 0 } })
     const sword: CombatAttack = { name: 'Sword', toHit: 6, damage: { count: 1, sides: 6, bonus: 2 }, damageType: 'slashing', range: 1 }
     resolveAttack(scriptRng([[14, 20], [3, 8]]), mkBattler(), sword, bard) // 20 − 3 = 17 → miss
     expect(bard.hp).toBe(30)

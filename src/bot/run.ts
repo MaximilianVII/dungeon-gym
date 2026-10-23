@@ -5,17 +5,17 @@ import { lineOfSight, visibleTiles } from '../game/los'
 import { rollDamage, rollDie, type Rng } from '../combat/dice'
 import { buildPlayerBattler, buildEnemyBattler, charLevelOf, cloneAttack, rollInitiative } from '../combat/setup'
 import { getMonster } from '../combat/monsters'
-import { resolveAttack, combatMode, tickConditions, rollDeathSave } from '../combat/resolve'
+import { resolveAttack, combatMode, tickConditions, rollDeathSave, endWildShape } from '../combat/resolve'
 import { planEnemyTurn } from '../combat/ai'
 import { bossTurn } from '../combat/boss'
-import { canTakeLevelIn } from '../combat/multiclass'
+import { canTakeLevelIn, hitDieOf } from '../combat/multiclass'
 import { isOutOfFight, removeCondition, type Battler, type CombatAttack } from '../combat/types'
 import { generateLevelForRun, RUN_LENGTH } from '../dungeon/generate'
 import type { Level } from '../dungeon/levels'
 import { applyXp, monsterXp } from '../dungeon/leveling'
 import { drawRewards, effectScore, getArtifact, pickArtifact, type ArtifactEffect, type LootWeights } from '../items/artifacts'
 import { GEAR, usableGear, type GearItem } from '../items/gear'
-import { buildCharacter, starterSpec, validateCharacterSpec, type CharacterSpec, type ClassKey } from '../character/build'
+import { abilityMod, buildCharacter, starterSpec, validateCharacterSpec, type CharacterSpec, type ClassKey } from '../character/build'
 import { casterSlots, profBonus } from '../character/progression'
 import { deriveSeed, rngOf, seedRng, type RngState } from '../rng'
 import { genomeHash, lootWeights, validateGenome, type Genes, type Genome } from './genome'
@@ -47,6 +47,11 @@ export const RUN_STATE_VERSION = 1
 const ENGAGE_RADIUS = 4
 const TRAP_DAMAGE = { count: 2, sides: 4, bonus: 0 }
 const SHRINE_FRAC = 0.4
+/** Mid-level short rests allowed per dungeon level (see shortRestAfterFight). */
+const SHORT_RESTS_PER_LEVEL = 1
+/** A long rest before every Nth floor (floors 4, 7, 10, …): about one 5e
+ *  adventuring day of 6–8 encounters per long rest. */
+const LONG_REST_EVERY = 3
 /** Step budget per dungeon level (the cap is depth × this); hitting it is a loss. */
 export const STEPS_PER_LEVEL = 8000
 /** Deepest allowed run. */
@@ -55,7 +60,8 @@ export const MAX_DEPTH = 50
 const COMBAT_ROUND_CAP = 60
 /** Exploration: how far the party sees while sweeping a level. */
 const VISION_RADIUS = 6
-const STARTING_POTIONS = 1
+/** Potions of Healing each character starts a run with. */
+const STARTING_POTIONS = 2
 /** Found-gear weapon numbers assume a +3 proficiency (level 5); higher levels add the difference. */
 const GEAR_BASE_PROF = 3
 /** The held cast-wand a bot fires as a bonus action while it has charges. */
@@ -106,6 +112,8 @@ export interface MemberState {
   /** Artifact keys picked so far (their bonuses stack — each is unique). */
   owned: string[]
   xp: number
+  /** Hit Dice left to spend on short rests (one per character level at most). */
+  hitDice: number
   depthReached: number
   alive: boolean
   deathLevel?: number
@@ -113,6 +121,31 @@ export interface MemberState {
   damage: number
   healing: number
   kills: number
+  stats: MemberStats
+}
+
+/** Per-member telemetry (balance analysis); plain JSON. */
+export interface MemberStats {
+  /** Turns the bot acted (not surprised, not downed). */
+  turns: number
+  /** Acting turns whose action was no attack, heal or retreat (it only moved or waited). */
+  idleTurns: number
+  /** Acting turns spent retreating. */
+  retreatTurns: number
+  fights: number
+  /** Enemies met, summed over fights. */
+  foesFaced: number
+  /** Most enemies in a single fight. */
+  maxFoes: number
+  /** Turns lost to a surprise round. */
+  surprisedTurns: number
+  slotsSpent: number
+  potionsUsed: number
+  damageTaken: number
+  /** Monster key that last damaged the member. */
+  lastHitBy?: string
+  /** Monster key (or 'trap') whose damage killed the member. */
+  killedBy?: string
 }
 
 export interface CombatState {
@@ -167,6 +200,8 @@ export interface RunState {
   longRestKits: number
   /** Charges on a found cast-wand. */
   castCharges: number
+  /** Short rests already taken on the current level. */
+  shortRestsThisLevel: number
   members: MemberState[]
 }
 
@@ -187,6 +222,7 @@ export interface MemberResult {
   damage: number
   healing: number
   kills: number
+  stats: MemberStats
 }
 
 export interface RunResult {
@@ -300,7 +336,7 @@ function deriveBattler(m: MemberState, prev: Battler | null, refillSlots: boolea
     const before = maxResources(prev.classLevels ?? m.spec.classLevels, cha)
     const now = b.resources
     const keep = (k: keyof typeof now): number => Math.max(0, prev.resources![k] + now[k] - before[k])
-    b.resources = { rage: keep('rage'), secondWind: keep('secondWind'), actionSurge: keep('actionSurge'), inspiration: keep('inspiration') }
+    b.resources = { rage: keep('rage'), secondWind: keep('secondWind'), actionSurge: keep('actionSurge'), inspiration: keep('inspiration'), wildShape: keep('wildShape') }
   }
   if (prev.inspirationDie !== undefined) b.inspirationDie = prev.inspirationDie
   return b
@@ -336,11 +372,13 @@ export function createRun(config: RunConfig): RunState {
       usage: {},
       owned: [],
       xp: 0,
+      hitDice: charLevelOf(spec.classLevels),
       depthReached: 1,
       alive: true,
       damage: 0,
       healing: 0,
       kills: 0,
+      stats: { turns: 0, idleTurns: 0, retreatTurns: 0, fights: 0, foesFaced: 0, maxFoes: 0, surprisedTurns: 0, slotsSpent: 0, potionsUsed: 0, damageTaken: 0 },
     }
     m.battler = deriveBattler(m, null, true)
     return m
@@ -375,6 +413,7 @@ export function createRun(config: RunConfig): RunState {
     scrolls: 0,
     longRestKits: 0,
     castCharges: 0,
+    shortRestsThisLevel: 0,
     members,
   }
 }
@@ -541,8 +580,19 @@ function loadLevel(s: RunState): void {
   s.seen = new Array<number>(reach.flags.length).fill(0)
   s.seenCount = 0
   s.exploreSteps = 0
+  s.shortRestsThisLevel = 0
   s.exploreBudget = Math.min(3000, Math.max(200, s.reachableFloor * 2))
   reveal(s, lvl.map, s.pos)
+}
+
+/** Mark a member dead (once), recording where and — for combat — by whom. */
+function killMember(s: RunState, m: MemberState, cause: DeathCause): void {
+  m.alive = false
+  if (m.deathLevel !== undefined) return
+  m.deathLevel = s.levelIndex + 1
+  m.deathCause = cause
+  if (cause === 'trap') m.stats.killedBy = 'trap'
+  else if (cause === 'combat' && m.stats.lastHitBy !== undefined) m.stats.killedBy = m.stats.lastHitBy
 }
 
 function finishRun(s: RunState, won: boolean, reason: EndReason): void {
@@ -552,37 +602,70 @@ function finishRun(s: RunState, won: boolean, reason: EndReason): void {
   s.combat = null
   if (won) return
   for (const m of s.members) {
-    if (!m.alive) continue
-    m.alive = false
-    if (m.deathLevel === undefined) {
-      m.deathLevel = s.levelIndex + 1
-      m.deathCause = reason === 'wiped' ? 'combat' : 'stalled'
-    }
+    if (m.alive) killMember(s, m, reason === 'wiped' ? 'combat' : 'stalled')
   }
 }
 
-/** Camp between levels: survivors rest (long = full HP + all slots). */
+/** What any short rest restores besides HP: per-short-rest features and a
+ *  warlock's Pact Magic slots (added back, capped at the build's full table). */
+function restoreShortRestFeatures(m: MemberState): void {
+  const b = m.battler
+  const cha = m.spec.abilityScores.cha
+  b.resources = restoreResources(b.resources ?? maxResources(m.spec.classLevels, cha), m.spec.classLevels, cha, false)
+  const warlockLv = m.spec.classLevels.warlock ?? 0
+  const pact = warlockLv > 0 ? casterSlots('warlock', warlockLv) : null
+  if (pact) {
+    const full = buildCharacter(m.spec).spellSlots
+    const slots = [...(b.spellSlots ?? [])]
+    for (let i = 0; i < pact.length; i++) slots[i] = Math.min(full[i] ?? 0, (slots[i] ?? 0) + pact[i])
+    b.spellSlots = slots
+  }
+}
+
+/** Camp between levels: survivors rest (long = full HP, slots, uses and half
+ *  the Hit Dice back; short = top up to ~3/4 HP + short-rest features). */
 function restParty(s: RunState, long: boolean): void {
   for (const m of s.members) {
     if (!m.alive) continue
     const b = m.battler
-    b.resources = restoreResources(b.resources ?? maxResources(m.spec.classLevels, m.spec.abilityScores.cha), m.spec.classLevels, m.spec.abilityScores.cha, long)
     if (long) {
+      const level = charLevelOf(m.spec.classLevels)
       b.hp = b.maxHp
       b.spellSlots = [...buildCharacter(m.spec).spellSlots]
+      b.resources = maxResources(m.spec.classLevels, m.spec.abilityScores.cha)
+      m.hitDice = Math.min(level, m.hitDice + Math.max(1, Math.floor(level / 2)))
       continue
     }
-    // Short rest: top up to ~3/4 HP (Hit Dice); a warlock regains its Pact
-    // Magic slots (added back, capped at the build's full table).
     b.hp = Math.max(b.hp, Math.floor(b.maxHp * 0.75))
-    const warlockLv = m.spec.classLevels.warlock ?? 0
-    const pact = warlockLv > 0 ? casterSlots('warlock', warlockLv) : null
-    if (pact) {
-      const full = buildCharacter(m.spec).spellSlots
-      const slots = [...(b.spellSlots ?? [])]
-      for (let i = 0; i < pact.length; i++) slots[i] = Math.min(full[i] ?? 0, (slots[i] ?? 0) + pact[i])
-      b.spellSlots = slots
+    restoreShortRestFeatures(m)
+  }
+}
+
+/**
+ * SRD short rest inside a level: after a won fight, if a survivor is below
+ * half HP, the party rests once per level — each member spends Hit Dice
+ * (die + CON, at least 1 HP each) until it is back to 3/4 HP or out of dice,
+ * and regains its short-rest features.
+ */
+function shortRestAfterFight(s: RunState, rng: Rng): void {
+  if (s.shortRestsThisLevel >= SHORT_RESTS_PER_LEVEL) return
+  const alive = aliveMembers(s)
+  if (!alive.some((m) => m.battler.hp < m.battler.maxHp / 2)) return
+  s.shortRestsThisLevel++
+  // Song of Rest (bard 2+): whoever regains HP from Hit Dice gets an extra 1d6.
+  const songOfRest = alive.some((m) => (m.spec.classLevels.bard ?? 0) >= 2)
+  for (const m of alive) {
+    const b = m.battler
+    const die = hitDieOf(m.classKey)
+    const con = abilityMod(m.spec.abilityScores.con)
+    let spent = 0
+    while (m.hitDice > 0 && b.hp < Math.floor(b.maxHp * 0.75)) {
+      b.hp = Math.min(b.maxHp, b.hp + Math.max(1, rollDie(rng, die) + con))
+      m.hitDice--
+      spent++
     }
+    if (songOfRest && spent > 0) b.hp = Math.min(b.maxHp, b.hp + rollDie(rng, 6))
+    restoreShortRestFeatures(m)
   }
 }
 
@@ -650,7 +733,7 @@ function nextLevel(s: RunState): void {
     finishRun(s, true, 'won')
     return
   }
-  let longRest = (s.levelIndex + 1) % 5 === 0
+  let longRest = s.levelIndex % LONG_REST_EVERY === 0
   if (!longRest && s.longRestKits > 0) {
     s.longRestKits--
     longRest = true
@@ -674,6 +757,17 @@ function spotted(s: RunState, map: GameMap): Spawn | null {
   return null
 }
 
+/**
+ * SRD surprise: the party is surprised only if the foe that spotted it beats
+ * the party's best passive Perception (10 + WIS modifier) with a Dexterity
+ * (Stealth) check. Otherwise both sides start the fight normally.
+ */
+function partyIsSurprised(s: RunState, spotter: Spawn, rng: Rng): boolean {
+  const mon = getMonster(spotter.key)
+  const passive = Math.max(...aliveMembers(s).map((m) => 10 + abilityMod(m.spec.abilityScores.wis)))
+  return rollDie(rng, 20) + (mon?.initiativeMod ?? 0) > passive
+}
+
 function startCombat(s: RunState, spotter: Spawn, rng: Rng): void {
   const map = currentLevel(s).map
   const engaged = s.remaining.filter(
@@ -689,6 +783,7 @@ function startCombat(s: RunState, spotter: Spawn, rng: Rng): void {
     b.deathSaves = { successes: 0, failures: 0, stable: false, dead: false }
     // Once-per-fight features refresh with every fight.
     b.darkOneLuckUsed = false
+    endWildShape(b)
   })
   const enemies = engaged
     .map((e) => {
@@ -702,10 +797,15 @@ function startCombat(s: RunState, spotter: Spawn, rng: Rng): void {
     order: [],
     turn: 0,
     round: 1,
-    surprised: true,
+    surprised: partyIsSurprised(s, spotter, rng),
     engaged: engaged.map((e) => e.id),
   }
   combat.order = rollInitiative(rng, combatBattlers(s, combat)).order.map((b) => b.id)
+  for (const m of alive) {
+    m.stats.fights++
+    m.stats.foesFaced += enemies.length
+    m.stats.maxFoes = Math.max(m.stats.maxFoes, enemies.length)
+  }
   s.combat = combat
   s.phase = 'combat'
 }
@@ -718,7 +818,32 @@ function gotoNext(c: CombatState): void {
   }
 }
 
+/** The monster key of an enemy battler id (`${key}-${spawnId}`). */
+function monsterKeyOf(enemy: Battler): string {
+  const i = enemy.id.lastIndexOf('-')
+  return i > 0 ? enemy.id.slice(0, i) : enemy.id
+}
+
 function runEnemyTurn(s: RunState, enemy: Battler, battlers: Battler[], rng: Rng): void {
+  const hpBefore = battlers.map((b) => b.hp)
+  enemyAct(s, enemy, battlers, rng)
+  battlers.forEach((b, i) => {
+    if (b.team !== 'player' || b.hp >= hpBefore[i]) return
+    const m = s.members.find((x) => x.battler.id === b.id)
+    if (!m) return
+    m.stats.damageTaken += hpBefore[i] - Math.max(0, b.hp)
+    m.stats.lastHitBy = monsterKeyOf(enemy)
+  })
+}
+
+function enemyAct(s: RunState, enemy: Battler, battlers: Battler[], rng: Rng): void {
+  // Recharge X–6: each spent attack comes back on a d6 roll ≥ X.
+  if (enemy.spent && enemy.spent.length > 0) {
+    enemy.spent = enemy.spent.filter((name) => {
+      const atk = enemy.attacks.find((a) => a.name === name)
+      return !(atk?.recharge && rollDie(rng, 6) >= atk.recharge)
+    })
+  }
   if (bossTurn(rng, enemy, battlers).consumed) return
   const plan = planEnemyTurn(enemy, battlers, currentLevel(s).map)
   if (plan.moves.length > 0) enemy.pos = plan.finalPos
@@ -728,11 +853,15 @@ function runEnemyTurn(s: RunState, enemy: Battler, battlers: Battler[], rng: Rng
   } else if (plan.attack) {
     const target = battlers.find((b) => b.id === plan.attack!.targetId)
     if (target) {
-      const mode = combatMode(enemy, target, plan.attack.attack)
-      for (let i = 0; i < Math.max(1, enemy.attacksPerAction); i++) {
+      const atk = plan.attack.attack
+      const mode = combatMode(enemy, target, atk)
+      // A Recharge attack is a single use per recharge (no Multiattack repeats).
+      const swings = atk.recharge ? 1 : Math.max(1, enemy.attacksPerAction)
+      for (let i = 0; i < swings; i++) {
         if (target.hp <= 0) break
-        resolveAttack(rng, enemy, plan.attack.attack, target, mode)
+        resolveAttack(rng, enemy, atk, target, mode)
       }
+      if (atk.recharge) enemy.spent = [...(enemy.spent ?? []), atk.name]
     }
   }
 }
@@ -756,15 +885,11 @@ function levelUp(m: MemberState, levelsGained: number): void {
   m.battler = deriveBattler(m, m.battler, true)
 }
 
-function finishCombat(s: RunState, won: boolean): void {
+function finishCombat(s: RunState, won: boolean, rng: Rng): void {
   const c = s.combat
   if (!c) return
   if (!won) {
-    for (const m of aliveMembers(s)) {
-      m.alive = false
-      m.deathLevel = s.levelIndex + 1
-      m.deathCause = 'combat'
-    }
+    for (const m of aliveMembers(s)) killMember(s, m, 'combat')
     finishRun(s, false, 'wiped')
     return
   }
@@ -783,7 +908,10 @@ function finishCombat(s: RunState, won: boolean): void {
     removeCondition(m.battler, 'unconscious')
     const prog = applyXp(charLevelOf(m.spec.classLevels), m.xp, gain)
     m.xp = prog.xp
-    if (prog.levelsGained > 0) levelUp(m, prog.levelsGained)
+    if (prog.levelsGained > 0) {
+      levelUp(m, prog.levelsGained)
+      m.hitDice += prog.levelsGained
+    }
   }
   // Spend Scrolls of Resurrection to bring fallen teammates back at 1 HP.
   while (s.scrolls > 0) {
@@ -793,11 +921,13 @@ function finishCombat(s: RunState, won: boolean): void {
     dead.alive = true
     delete dead.deathLevel
     delete dead.deathCause
+    delete dead.stats.killedBy
     dead.battler.hp = 1
     dead.battler.deathSaves = { successes: 0, failures: 0, stable: false, dead: false }
     removeCondition(dead.battler, 'unconscious')
   }
   s.remaining = s.remaining.filter((e) => !c.engaged.includes(e.id))
+  shortRestAfterFight(s, rng)
   s.combat = null
   s.phase = 'explore'
 }
@@ -814,11 +944,7 @@ function enemiesUp(battlers: Battler[]): number {
 function syncDeaths(s: RunState, c: CombatState): void {
   for (const id of c.memberIds) {
     const m = memberById(s, id)
-    if (m.alive && m.battler.deathSaves?.dead) {
-      m.alive = false
-      m.deathLevel = s.levelIndex + 1
-      m.deathCause = 'combat'
-    }
+    if (m.alive && m.battler.deathSaves?.dead) killMember(s, m, 'combat')
   }
 }
 
@@ -827,11 +953,11 @@ function combatStep(s: RunState, c: CombatState, rng: Rng, decide: Rng): void {
   const battlers = combatBattlers(s, c)
   const o = outcome(battlers)
   if (o !== 'ongoing') {
-    finishCombat(s, o === 'won')
+    finishCombat(s, o === 'won', rng)
     return
   }
   if (c.round > COMBAT_ROUND_CAP) {
-    finishCombat(s, battlers.some((b) => b.team === 'player' && b.hp > 0))
+    finishCombat(s, battlers.some((b) => b.team === 'player' && b.hp > 0), rng)
     return
   }
   const actor = battlers.find((b) => b.id === c.order[c.turn])
@@ -854,15 +980,12 @@ function combatStep(s: RunState, c: CombatState, rng: Rng, decide: Rng): void {
   if (actor.hp <= 0) {
     const ds = actor.deathSaves
     if (ds && !ds.dead && !ds.stable) rollDeathSave(rng, actor)
-    if (actor.deathSaves?.dead) {
-      member.alive = false
-      member.deathLevel = s.levelIndex + 1
-      member.deathCause = 'combat'
-    }
+    if (actor.deathSaves?.dead) killMember(s, member, 'combat')
     gotoNext(c)
     return
   }
   if (c.surprised && c.round === 1) {
+    member.stats.surprisedTurns++
     gotoNext(c)
     return
   }
@@ -884,7 +1007,14 @@ function combatStep(s: RunState, c: CombatState, rng: Rng, decide: Rng): void {
   const enemyHpBefore = sumHp(battlers, 'enemy')
   const partyHpBefore = sumHp(battlers, 'player')
   const upBefore = enemiesUp(battlers)
-  botPlayerTurn(actor, battlers, currentLevel(s).map, rng, decide, member.genes, member.usage)
+  const slotsBefore = (actor.spellSlots ?? []).reduce((a, b) => a + b, 0)
+  const potionsBefore = actor.potions ?? 0
+  const kind = botPlayerTurn(actor, battlers, currentLevel(s).map, rng, decide, member.genes, member.usage)
+  member.stats.turns++
+  if (kind === 'move' || kind === 'idle') member.stats.idleTurns++
+  if (kind === 'retreat') member.stats.retreatTurns++
+  member.stats.slotsSpent += Math.max(0, slotsBefore - (actor.spellSlots ?? []).reduce((a, b) => a + b, 0))
+  member.stats.potionsUsed += Math.max(0, potionsBefore - (actor.potions ?? 0))
   member.damage += Math.max(0, enemyHpBefore - sumHp(battlers, 'enemy'))
   member.healing += Math.max(0, sumHp(battlers, 'player') - partyHpBefore)
   member.kills += Math.max(0, upBefore - enemiesUp(battlers))
@@ -938,11 +1068,7 @@ function exploreStep(s: RunState, rng: Rng): void {
     const victim = aliveMembers(s)[0]
     if (victim) {
       victim.battler.hp = Math.max(0, victim.battler.hp - rollDamage(rng, TRAP_DAMAGE).total)
-      if (victim.battler.hp <= 0) {
-        victim.alive = false
-        victim.deathLevel = s.levelIndex + 1
-        victim.deathCause = 'trap'
-      }
+      if (victim.battler.hp <= 0) killMember(s, victim, 'trap')
     }
     if (aliveMembers(s).length === 0) {
       finishRun(s, false, 'wiped')
@@ -1015,6 +1141,7 @@ export function runResult(s: RunState): RunResult {
         damage: m.damage,
         healing: m.healing,
         kills: m.kills,
+        stats: { ...m.stats },
       }
       if (m.deathLevel !== undefined) r.deathLevel = m.deathLevel
       if (m.deathCause !== undefined) r.deathCause = m.deathCause

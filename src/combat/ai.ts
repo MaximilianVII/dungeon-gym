@@ -59,8 +59,10 @@ function bestStepAway(from: Vec2, target: Vec2, map: GameMap, occupied: Set<stri
 }
 
 function chooseAttack(enemy: Battler, dist: number, hasLos: boolean): CombatAttack | undefined {
-  const melee = enemy.attacks.find((a) => a.range <= 1)
-  const ranged = enemy.attacks.find((a) => a.range > 1)
+  // Attacks with a Recharge that are spent this fight are unavailable.
+  const ready = enemy.attacks.filter((a) => !(a.recharge && enemy.spent?.includes(a.name)))
+  const melee = ready.find((a) => a.range <= 1)
+  const ranged = ready.find((a) => a.range > 1)
   if (dist <= 1 && melee) return melee
   // A ranged attack needs a clear line of sight (no firing through walls).
   if (ranged && dist <= ranged.range && hasLos) return ranged

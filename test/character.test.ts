@@ -43,14 +43,16 @@ describe('the 12 starting characters', () => {
 
   it('casters get slots and class spells with their own casting ability', () => {
     const w = starterCharacter('wizard')
-    expect(w).toMatchObject({ maxHp: 27, ac: 12, spellSlots: [4, 3, 2], subclass: 'evocation' })
+    expect(w).toMatchObject({ maxHp: 27, ac: 15, spellSlots: [3, 3, 2], subclass: 'evocation' })
     const fireBolt = w.spells.find((s) => s.name === 'Fire Bolt')
     expect(fireBolt).toMatchObject({ toHit: 5, damage: { count: 2, sides: 10 } })
     expect(w.spells.some((s) => s.name === 'Fireball')).toBe(true)
     expect(w.spells.some((s) => s.name === 'Ice Storm')).toBe(false)
     const warlock = starterCharacter('warlock')
     expect(warlock.spellSlots).toEqual([0, 0, 2])
-    expect(warlock.spells.map((s) => s.name)).toEqual(['Eldritch Blast', 'Vampiric Touch'])
+    expect(warlock.spells.map((s) => s.name)).toEqual(['Eldritch Blast', 'Shatter', 'Vampiric Touch'])
+    expect(warlock.spells[0].damage).toEqual({ count: 2, sides: 10, bonus: 4 }) // Agonizing Blast: +CHA per beam
+    expect(warlock.ac).toBe(15) // Armor of Shadows
     const cleric = starterCharacter('cleric')
     expect(cleric.ac).toBe(18)
     expect(cleric.spells.find((s) => s.name === 'Healing Word')?.heal).toEqual({ count: 1, sides: 4, bonus: 2 })
@@ -136,7 +138,7 @@ describe('spell catalogue', () => {
   it('grants class spells capped by slot level, with cantrip scaling', () => {
     expect(grantSpells('fighter', 5, 3, 0, 5)).toEqual([])
     const low = grantSpells('wizard', 5, 1, 3, 1)
-    expect(low.map((s) => s.name)).toEqual(['Fire Bolt', 'Ray of Frost', 'Burning Hands'])
+    expect(low.map((s) => s.name)).toEqual(['Fire Bolt', 'Ray of Frost', 'Burning Hands', 'Thunderwave', 'Magic Missile'])
     expect(low[0].damage.count).toBe(1)
     expect(cantripDice(5)).toBe(2)
     expect(cantripDice(11)).toBe(3)

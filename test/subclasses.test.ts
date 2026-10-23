@@ -54,7 +54,7 @@ describe('subclass effects in combat', () => {
   })
 
   it('Lore bard: Cutting Words turns a hit into a miss, spending a Bardic Inspiration use', () => {
-    const bard = mkBattler({ team: 'player', subclass: 'lore', classLevels: { bard: 3 }, ac: 20, hp: 30, maxHp: 30, resources: { rage: 0, secondWind: 0, actionSurge: 0, inspiration: 1 } })
+    const bard = mkBattler({ team: 'player', subclass: 'lore', classLevels: { bard: 3 }, ac: 20, hp: 30, maxHp: 30, resources: { rage: 0, secondWind: 0, actionSurge: 0, inspiration: 1, wildShape: 0 } })
     const orc = mkBattler()
     resolveAttack(scriptRng([[14, 20], [3, 6]]), orc, sword, bard)
     expect(bard.hp).toBe(30)

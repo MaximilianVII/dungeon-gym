@@ -72,7 +72,7 @@ describe('setup', () => {
 
   it('scales monsters with depth and never mutates the stat block', () => {
     expect(monsterDepthScale(0)).toEqual({ hpMult: 1, acBonus: 0, hitBonus: 0, dmgBonus: 0 })
-    expect(monsterDepthScale(24)).toMatchObject({ acBonus: 2, hitBonus: 3, dmgBonus: 4 })
+    expect(monsterDepthScale(24)).toMatchObject({ acBonus: 2, hitBonus: 3, dmgBonus: 3 })
     const g0 = buildEnemyBattler(GOBLIN, 'g1', { x: 0, y: 0 }, 0)
     expect(g0).toMatchObject({ hp: 7, ac: 15 })
     expect(g0.affix).toBeUndefined()

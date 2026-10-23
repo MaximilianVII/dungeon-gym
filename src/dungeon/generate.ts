@@ -111,19 +111,21 @@ function pathExists(tiles: Tile[][], a: Vec2, b: Vec2): boolean {
   return false
 }
 
-// Depth-appropriate monster pools (keys must exist in combat/monsters). Deeper
-// tiers swap in TOUGHER monster TYPES; on top of that, every monster's stats are
-// scaled up with depth (buildEnemyBattler), so difficulty keeps climbing past
-// the last tier even though the roster caps out.
+// Depth-appropriate monster pools (keys must exist in combat/monsters). Tiers
+// ramp by challenge rating so a solo level-5 character meets CR ≤ 1/2 foes on
+// the first floors, CR 1 from floor 5, CR 2–3 from floor 7, the first CR 5 troll
+// on floor 9 and wraiths / hill giants from floor 10. On top of that every monster's
+// stats grow gently with depth (buildEnemyBattler).
 const MONSTER_POOLS: string[][] = [
   ['goblin', 'kobold', 'bandit'],
-  ['goblin', 'skeleton', 'bandit', 'dire-wolf', 'giant-spider'],
-  ['skeleton', 'orc', 'cultist', 'dire-wolf', 'giant-spider', 'hobgoblin'],
-  ['skeleton', 'orc', 'zombie', 'cultist', 'acolyte', 'giant-spider', 'gnoll'],
-  ['orc', 'zombie', 'ogre', 'cultist', 'acolyte', 'hobgoblin', 'gnoll'],
-  ['ogre', 'bugbear', 'gnoll', 'wight', 'cultist', 'dire-wolf'],
-  ['ogre', 'bugbear', 'wight', 'troll', 'acolyte'],
-  ['wight', 'troll', 'wraith', 'hill-giant', 'ogre'],
+  ['goblin', 'skeleton', 'bandit', 'kobold'],
+  ['skeleton', 'orc', 'cultist', 'hobgoblin', 'zombie'],
+  ['orc', 'zombie', 'cultist', 'acolyte', 'gnoll', 'hobgoblin'],
+  ['orc', 'gnoll', 'hobgoblin', 'acolyte', 'dire-wolf', 'giant-spider', 'bugbear'],
+  ['bugbear', 'gnoll', 'dire-wolf', 'giant-spider', 'cultist', 'orc'],
+  ['ogre', 'bugbear', 'wight', 'gnoll', 'acolyte'],
+  ['ogre', 'wight', 'bugbear', 'gnoll'],
+  ['wight', 'ogre', 'troll', 'bugbear'],
   ['troll', 'wraith', 'hill-giant'],
 ]
 
@@ -259,7 +261,9 @@ export function generateLevel(seed: number, id: string, name: string, levelIndex
 
   // 5a. Enemies — drawn from the depth pool, scattered through the rooms past
   // the first. The final level fields fewer minions but adds a boss.
-  const pool = MONSTER_POOLS[Math.min(levelIndex, MONSTER_POOLS.length - 1)]
+  // A boss level's minions come from three tiers lower: the boss is the threat.
+  // A boss level's minions come from three tiers lower: the boss is the threat.
+  const pool = MONSTER_POOLS[Math.min(isLast ? Math.max(0, levelIndex - 3) : levelIndex, MONSTER_POOLS.length - 1)]
   // Balance v2: the non-last enemy count now scales with the ROOM count (rooms
   // already grow with the map), aiming for roughly ONE foe per ~3-4 rooms — so a
   // big deep map feels populated WITHOUT becoming a horde, and the foes stay

@@ -211,6 +211,10 @@ export function spellsForBuild(classLevels: Record<string, number>, abilityScore
     const own = casterSlots(cls, lvl)
     const castMod = abilityMod(abilityScores[ability])
     for (const atk of grantSpells(cls, prof + castMod, own ? maxSlotLevelOf(own) : 0, castMod, level)) {
+      // Agonizing Blast (an SRD Eldritch Invocation, warlock 2+): +CHA per beam.
+      if (cls === 'warlock' && lvl >= 2 && atk.name === 'Eldritch Blast') {
+        atk.damage = { ...atk.damage, bonus: atk.damage.bonus + castMod * atk.damage.count }
+      }
       const prev = byName.get(atk.name)
       if (!prev || atk.toHit > prev.toHit) byName.set(atk.name, atk)
     }
@@ -241,9 +245,34 @@ export function buildCharacter(spec: CharacterSpec): PlayerSource {
     spells: spellsForBuild(classLevels, s),
     spellSlots: casterSlotsMulti(classLevels) ?? [],
     abilities: grantAbilities(classLevels),
+    saves: savesOf(spec.classKey, mods, prof),
+  }
+  // Armor of Shadows (SRD Eldritch Invocation, warlock 2+): Mage Armor at will,
+  // no slot — a warlock in light armor or none takes it when it is better.
+  const lightOrNone = !spec.armor || ARMOR[spec.armor]?.kind === 'light'
+  if ((classLevels.warlock ?? 0) >= 2 && lightOrNone && !spec.shield && sheet.ac < 13 + mods.dex) sheet.ac = 13 + mods.dex
+  // Mage Armor (SRD, wizard/sorcerer): an unarmored arcane caster casts it at
+  // the start of the day — AC 13 + DEX for one 1st-level slot.
+  const arcane = (classLevels.wizard ?? 0) > 0 || (classLevels.sorcerer ?? 0) > 0
+  if (arcane && !spec.armor && !spec.shield && sheet.ac < 13 + mods.dex && (sheet.spellSlots[0] ?? 0) > 0) {
+    sheet.ac = 13 + mods.dex
+    sheet.spellSlots = [sheet.spellSlots[0] - 1, ...sheet.spellSlots.slice(1)]
   }
   if (subclass) sheet.subclass = subclass
   return sheet
+}
+
+/** Saving-throw proficiencies of each class (only the starting class counts). */
+const SAVE_PROFICIENCIES: Record<ClassKey, readonly (keyof AbilityScores)[]> = {
+  barbarian: ['str', 'con'], bard: ['dex', 'cha'], cleric: ['wis', 'cha'], druid: ['int', 'wis'],
+  fighter: ['str', 'con'], monk: ['str', 'dex'], paladin: ['wis', 'cha'], ranger: ['str', 'dex'],
+  rogue: ['dex', 'int'], sorcerer: ['con', 'cha'], warlock: ['wis', 'cha'], wizard: ['int', 'wis'],
+}
+
+function savesOf(classKey: ClassKey, mods: Record<keyof AbilityScores, number>, prof: number): Record<keyof AbilityScores, number> {
+  const profs = SAVE_PROFICIENCIES[classKey]
+  const save = (k: keyof AbilityScores): number => mods[k] + (profs.includes(k) ? prof : 0)
+  return { str: save('str'), dex: save('dex'), con: save('con'), int: save('int'), wis: save('wis'), cha: save('cha') }
 }
 
 // ---------------------------------------------------------------------------

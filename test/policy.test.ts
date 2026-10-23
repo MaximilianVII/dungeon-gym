@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { botPlayerTurn, pathStep } from '../src/bot/policy'
+import { applyDamage } from '../src/combat/resolve'
 import type { ClassResources } from '../src/combat/abilities'
 import { buildEnemyBattler, buildPlayerBattler } from '../src/combat/setup'
 import { CULTIST, GOBLIN } from '../src/combat/monsters'
@@ -54,7 +55,7 @@ describe('bonus actions', () => {
     const r = bot('barbarian', { x: 5, y: 4 })
     r.conditions = ['raging']
     r.hp = 2
-    const t2 = turn(r, [r, foe({ x: 6, y: 4 })], genes({ retreatAtHpFrac: 0.6, aggression: 0, healAtHpFrac: 0 }))
+    const t2 = turn(r, [r, bot('cleric', { x: 1, y: 7 }, 'p1'), foe({ x: 6, y: 4 })], genes({ retreatAtHpFrac: 0.6, aggression: 0, healAtHpFrac: 0 }))
     expect(t2.tally.Frenzy).toBe(1)
     expect(t2.tally.Retreat).toBe(1)
     expect(r.frenzyAttackPending).toBe(false)
@@ -88,11 +89,49 @@ describe('bonus actions', () => {
     expect(turn(b2, [b2, bot('fighter', { x: 2, y: 7 }, 'p1'), foe({ x: 3, y: 4 })], genes({ inspireBeforeAttack: false })).tally['Bardic Inspiration']).toBeUndefined()
   })
 
-  it('Cunning Action doubles a rogue’s movement', () => {
+  it('Cunning Action: Dash to close in when no foe is within reach', () => {
     const r = bot('rogue', { x: 1, y: 4 })
+    r.attacks = r.attacks.filter((a) => a.name !== 'Shortbow')
     const { tally } = turn(r, [r, foe({ x: 10, y: 4 })], genes({ kite: 0, aggression: 1 }))
     expect(tally['Cunning Action']).toBe(1)
     expect(tally.Rapier).toBeGreaterThanOrEqual(1)
+  })
+
+  it('Cunning Action: Hide when a foe is within reach, then Sneak Attack with advantage', () => {
+    let hidden = 0
+    let sneak = 0
+    for (let seed = 1; seed <= 20; seed++) {
+      const r = bot('rogue', { x: 2, y: 4 })
+      const g = foe({ x: 3, y: 4 }, 1000, -100)
+      const t = turn(r, [r, g], genes({ kite: 0, aggression: 1 }), {}, seed)
+      expect(t.tally.Hide).toBe(1)
+      if (r.sneakAttackUsed) sneak++
+      if (1000 - g.hp > 0) hidden++
+    }
+    expect(sneak).toBeGreaterThan(10) // Stealth (+DEX, expertise) usually beats a goblin's passive 9
+    expect(hidden).toBe(20)
+  })
+
+  it('Monk Martial Arts adds a bonus unarmed strike after attacking', () => {
+    const m = bot('monk', { x: 8, y: 4 })
+    const t = turn(m, [m, foe({ x: 9, y: 4 }, 1000, -100)], genes({ patientDefenseAdj: 4 }))
+    expect(t.tally.Quarterstaff).toBe(3) // Extra Attack + Martial Arts
+  })
+
+  it('Wild Shape: the druid takes a beast form whose HP soaks damage first', () => {
+    const d = bot('druid', { x: 8, y: 4 })
+    const t = turn(d, [d, foe({ x: 9, y: 4 })], genes())
+    expect(t.tally['Wild Shape (Ape)']).toBe(1)
+    expect(d.wildShape?.hp).toBe(19)
+    expect(d.ac).toBe(12)
+    expect(d.resources?.wildShape).toBe(1)
+    const hp = d.hp
+    applyDamage(d, 25, false, [])
+    expect(d.wildShape).toBeUndefined()
+    expect(d.ac).toBe(14)
+    expect(d.hp).toBe(hp - 6)
+    const t2 = turn(d, [d, foe({ x: 9, y: 4 }, 1000, -100)], genes({ healAtHpFrac: 0 }))
+    expect(t2.tally['Wild Shape (Ape)']).toBe(1)
   })
 })
 
@@ -101,7 +140,7 @@ describe('healing', () => {
     const c = bot('cleric', { x: 1, y: 7 })
     c.hp = 5
     c.potions = 1
-    expect(turn(c, [c, foe({ x: 10, y: 4 })], genes({ healAtHpFrac: 0.5, potionFirst: false })).tally['Healing Word']).toBe(1)
+    expect(turn(c, [c, foe({ x: 10, y: 4 })], genes({ healAtHpFrac: 0.5, potionFirst: false })).tally['Cure Wounds']).toBe(1) // the strongest heal
     expect(c.spellSlots?.[0]).toBe(3)
     expect(c.potions).toBe(1)
     const c2 = bot('cleric', { x: 1, y: 7 })
@@ -154,7 +193,7 @@ describe('movement decisions', () => {
     const g = genes({ retreatAtHpFrac: 0.6, aggression: 0, healAtHpFrac: 0, secondWindAtHpFrac: 0 })
     const a = low()
     const enemy = foe({ x: 6, y: 4 })
-    expect(turn(a, [a, enemy], { ...g, regroup: 0 }).tally.Retreat).toBe(1)
+    expect(turn(a, [a, bot('cleric', { x: 1, y: 7 }, 'p1'), enemy], { ...g, regroup: 0 }).tally.Retreat).toBe(1)
     expect(tileDistance(a.pos, enemy.pos)).toBeGreaterThan(1)
     const b = low()
     const ally = bot('cleric', { x: 5, y: 7 }, 'p1')
@@ -217,11 +256,11 @@ describe('targeting', () => {
     const w = bot('wizard', { x: 1, y: 4 })
     const t1 = turn(w, [w, foe({ x: 10, y: 4 }, 1000)], genes({ slotReserve: 1 }))
     expect(t1.tally['Fire Bolt']).toBe(1)
-    expect(w.spellSlots).toEqual([4, 3, 2])
+    expect(w.spellSlots).toEqual([3, 3, 2])
     const w2 = bot('wizard', { x: 1, y: 4 })
     const t2 = turn(w2, [w2, foe({ x: 10, y: 4 }, 1000)], genes({ slotReserve: 0 }))
     expect(t2.tally.Fireball).toBe(1)
-    expect(w2.spellSlots).toEqual([4, 3, 1])
+    expect(w2.spellSlots).toEqual([3, 3, 1])
   })
 
   it('Action Surge early, or only to finish a low foe', () => {

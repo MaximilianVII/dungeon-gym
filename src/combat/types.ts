@@ -1,6 +1,6 @@
 import type { Vec2 } from '../game/types'
 import type { DamageDice } from './dice'
-import type { ClassResources } from './abilities'
+import type { BeastForm, ClassResources } from './abilities'
 
 // ---------------------------------------------------------------------------
 // Combat-layer types. Plain JSON data only (no Set/Map/closures), so a fight in
@@ -11,7 +11,7 @@ export type Team = 'player' | 'enemy'
 
 // Minimal 5e condition set. 'raging' / 'inspired' / 'dodging' are turn/fight
 // states rather than 5e conditions, kept here so they share the same plumbing.
-export type Condition = 'prone' | 'poisoned' | 'frightened' | 'unconscious' | 'grappled' | 'restrained' | 'dodging' | 'raging' | 'inspired'
+export type Condition = 'prone' | 'poisoned' | 'frightened' | 'unconscious' | 'grappled' | 'restrained' | 'dodging' | 'raging' | 'inspired' | 'hidden'
 
 export interface CombatAttack {
   name: string
@@ -39,7 +39,19 @@ export interface CombatAttack {
    * Dexterity-style save for half — instead of a single-target attack roll.
    */
   area?: number
+  /** Recharge X–6: once used, the attack returns only on a d6 roll ≥ this at the start of the user's turn. */
+  recharge?: number
+  /** The attacker regains half the damage it deals (Vampiric Touch). */
+  drain?: boolean
+  /** Always hits (no attack roll), e.g. Magic Missile. */
+  autoHit?: boolean
+  /** Extra damage on a hit that the target may save against for half
+   *  (e.g. a giant spider's poison: 2d8, CON DC 11). */
+  rider?: { damage: DamageDice; damageType: string; save: Ability; dc: number }
 }
+
+/** The six abilities, by short name. */
+export type Ability = 'str' | 'dex' | 'con' | 'int' | 'wis' | 'cha'
 
 export interface DeathSaves {
   successes: number
@@ -83,6 +95,20 @@ export interface Battler {
   resources?: ClassResources
   /** Die size of the Bardic Inspiration this creature holds (with 'inspired'). */
   inspirationDie?: number
+  /** Saving-throw bonuses (players: ability mod + proficiency); missing = DEX
+   *  from initiativeMod, others +0. */
+  saves?: Partial<Record<Ability, number>>
+  /** Passive Perception (enemies; a hiding rogue must beat it). */
+  passivePerception?: number
+  /** Names of Recharge attacks used and not yet recharged. */
+  spent?: string[]
+  /** Druid Wild Shape: the beast form's remaining HP, AC and attack; the
+   *  druid's own AC is kept to restore when the form drops to 0 HP. */
+  wildShape?: { form: BeastForm; hp: number; formerAc: number }
+  /** Hunter Colossus Slayer already dealt this turn. */
+  colossusSlayerUsed?: boolean
+  /** Rogue Sneak Attack already dealt this turn. */
+  sneakAttackUsed?: boolean
   /** Berserker Frenzy — a bonus-action attack waiting to be spent this turn. */
   frenzyAttackPending?: boolean
   /** Signature class ability keys (see combat/abilities). */

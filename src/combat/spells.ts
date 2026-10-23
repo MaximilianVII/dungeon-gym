@@ -32,6 +32,10 @@ interface SpellTemplate {
   applies?: { condition: Condition; rounds: number }
   /** Area-of-effect burst radius in tiles. */
   area?: number
+  /** The caster regains half the damage dealt (Vampiric Touch). */
+  drain?: boolean
+  /** Always hits (Magic Missile). */
+  autoHit?: boolean
 }
 
 const CATALOGUE: SpellTemplate[] = [
@@ -44,20 +48,22 @@ const CATALOGUE: SpellTemplate[] = [
   { name: 'Produce Flame', classes: ['druid'], source: 'cantrip', damage: '1d8', damageType: 'fire', range: 6 },
   // — 1st level —
   { name: 'Burning Hands', classes: ['wizard', 'sorcerer'], source: 'spell', slotLevel: 1, damage: '3d6', damageType: 'fire', range: 3, area: 1 },
+  { name: 'Thunderwave', classes: ['bard', 'druid', 'sorcerer', 'wizard'], source: 'spell', slotLevel: 1, damage: '2d8', damageType: 'thunder', range: 3, area: 1 },
+  { name: 'Magic Missile', classes: ['wizard', 'sorcerer'], source: 'spell', slotLevel: 1, damage: '3d4+3', damageType: 'force', range: 24, autoHit: true }, // three darts
   { name: 'Guiding Bolt', classes: ['cleric'], source: 'spell', slotLevel: 1, damage: '4d6', damageType: 'radiant', range: 24 },
   { name: 'Inflict Wounds', classes: ['cleric'], source: 'spell', slotLevel: 1, damage: '3d10', damageType: 'necrotic', range: 1 },
   { name: 'Divine Smite', classes: ['paladin'], source: 'spell', slotLevel: 1, damage: '2d8', damageType: 'radiant', range: 1 },
   // — 2nd level —
-  { name: 'Scorching Ray', classes: ['wizard', 'sorcerer'], source: 'spell', slotLevel: 2, damage: '2d6', damageType: 'fire', range: 24 },
+  { name: 'Scorching Ray', classes: ['wizard', 'sorcerer'], source: 'spell', slotLevel: 2, damage: '6d6', damageType: 'fire', range: 24 }, // three 2d6 rays
   { name: 'Spiritual Weapon', classes: ['cleric'], source: 'spell', slotLevel: 2, damage: '2d8', damageType: 'force', range: 12 },
   { name: 'Moonbeam', classes: ['druid'], source: 'spell', slotLevel: 2, damage: '2d10', damageType: 'radiant', range: 24 },
-  { name: 'Shatter', classes: ['bard', 'sorcerer', 'wizard'], source: 'spell', slotLevel: 2, damage: '3d8', damageType: 'thunder', range: 12, area: 2 },
+  { name: 'Shatter', classes: ['bard', 'sorcerer', 'warlock', 'wizard'], source: 'spell', slotLevel: 2, damage: '3d8', damageType: 'thunder', range: 12, area: 2 },
   // — 3rd–5th level —
   { name: 'Fireball', classes: ['wizard', 'sorcerer'], source: 'spell', slotLevel: 3, damage: '8d6', damageType: 'fire', range: 30, area: 3 },
   { name: 'Lightning Bolt', classes: ['wizard', 'sorcerer'], source: 'spell', slotLevel: 3, damage: '8d6', damageType: 'lightning', range: 20, area: 3 },
   { name: 'Spirit Guardians', classes: ['cleric'], source: 'spell', slotLevel: 3, damage: '3d8', damageType: 'radiant', range: 1, area: 2 },
   { name: 'Call Lightning', classes: ['druid'], source: 'spell', slotLevel: 3, damage: '3d10', damageType: 'lightning', range: 24 },
-  { name: 'Vampiric Touch', classes: ['warlock', 'wizard'], source: 'spell', slotLevel: 3, damage: '3d6', damageType: 'necrotic', range: 1 },
+  { name: 'Vampiric Touch', classes: ['warlock', 'wizard'], source: 'spell', slotLevel: 3, damage: '3d6', damageType: 'necrotic', range: 1, drain: true }, // heals half the damage
   { name: 'Ice Storm', classes: ['wizard', 'sorcerer', 'druid'], source: 'spell', slotLevel: 4, damage: '5d6', damageType: 'cold', range: 60, area: 3 },
   { name: 'Cone of Cold', classes: ['wizard', 'sorcerer'], source: 'spell', slotLevel: 5, damage: '8d8', damageType: 'cold', range: 12, area: 3 },
   { name: 'Flame Strike', classes: ['cleric'], source: 'spell', slotLevel: 5, damage: '8d6', damageType: 'radiant', range: 12, area: 2 },
@@ -87,6 +93,8 @@ function toAttack(s: SpellTemplate, toHit: number, castMod: number): CombatAttac
   if (s.heal) atk.heal = withBonus(parseDamage(s.heal), castMod)
   if (s.applies) atk.applies = { ...s.applies }
   if (s.area !== undefined) atk.area = s.area
+  if (s.autoHit) atk.autoHit = true
+  if (s.drain) atk.drain = true
   return atk
 }
 

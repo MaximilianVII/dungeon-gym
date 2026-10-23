@@ -1,3 +1,5 @@
+import type { CombatAttack } from './types'
+
 // ---------------------------------------------------------------------------
 // Class signature combat abilities (the martial "buttons"; full casters lean on
 // their spells instead). Granted per class key — a multiclassed bot gains the
@@ -35,6 +37,26 @@ export interface ClassResources {
   secondWind: number
   actionSurge: number
   inspiration: number
+  /** Druid Wild Shape (2 per short rest from druid 2). */
+  wildShape: number
+}
+
+/** A druid's beast form (SRD beast stat blocks, reduced to what combat reads). */
+export interface BeastForm {
+  name: string
+  hp: number
+  ac: number
+  attack: CombatAttack
+  attacksPerAction: number
+}
+
+/** The best SRD beast a Circle of the Land druid can become at this level
+ *  (CR 1/4 from 2, CR 1/2 from 4, CR 1 from 8; no flying or swimming forms). */
+export function wildShapeForm(druidLevel: number): BeastForm | null {
+  if (druidLevel >= 8) return { name: 'Brown Bear', hp: 34, ac: 11, attacksPerAction: 2, attack: { name: 'Bear Maul', toHit: 6, damage: { count: 1, sides: 10, bonus: 4 }, damageType: 'slashing', range: 1, source: 'weapon' } }
+  if (druidLevel >= 4) return { name: 'Ape', hp: 19, ac: 12, attacksPerAction: 2, attack: { name: 'Ape Fist', toHit: 5, damage: { count: 1, sides: 6, bonus: 3 }, damageType: 'bludgeoning', range: 1, source: 'weapon' } }
+  if (druidLevel >= 2) return { name: 'Wolf', hp: 11, ac: 13, attacksPerAction: 1, attack: { name: 'Wolf Bite', toHit: 4, damage: { count: 2, sides: 4, bonus: 2 }, damageType: 'piercing', range: 1, source: 'weapon' } }
+  return null
 }
 
 /** "Unlimited" rages at barbarian 20, as a JSON-safe number. */
@@ -65,6 +87,7 @@ export function maxResources(classLevels: Record<string, number>, chaScore: numb
     secondWind: fighter >= 1 ? 1 : 0,
     actionSurge: fighter >= 17 ? 2 : fighter >= 2 ? 1 : 0,
     inspiration: bard >= 1 ? Math.max(1, Math.floor((chaScore - 10) / 2)) : 0,
+    wildShape: (classLevels.druid ?? 0) >= 2 ? 2 : 0,
   }
 }
 
@@ -78,6 +101,7 @@ export function restoreResources(current: ClassResources, classLevels: Record<st
     secondWind: max.secondWind,
     actionSurge: max.actionSurge,
     inspiration: (classLevels.bard ?? 0) >= 5 ? max.inspiration : current.inspiration,
+    wildShape: max.wildShape,
   }
 }
 

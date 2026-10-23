@@ -18,6 +18,7 @@ export type SubclassEffect =
   | { kind: 'darkOneLuck' /** Fiend — reroll one failed save per fight (simplified). */ }
   | { kind: 'cuttingWords' /** Lore — once per fight, subtract 1d6 from a hit against you. */ }
   | { kind: 'openHandTechnique' /** Open Hand — melee hits may knock prone (simplified). */ }
+  | { kind: 'colossusSlayer' /** Hunter — +1d8 once per turn on a weapon hit vs a wounded target. */ }
 
 export interface SubclassFeature {
   level: number
@@ -109,7 +110,7 @@ export const SUBCLASS_CATALOGUE: Subclass[] = deepFreeze([
   {
     classKey: 'ranger', key: 'hunter', name: 'Hunter', chosenAtLevel: 3,
     features: [
-      { level: 3, key: 'hunters_prey', name: 'Hunter’s Prey', description: 'Choose an offensive hunting technique.' },
+      { level: 3, key: 'hunters_prey', name: 'Hunter’s Prey: Colossus Slayer', description: 'Once per turn, a weapon hit deals an extra 1d8 to a creature below its HP maximum.', effect: { kind: 'colossusSlayer' } },
       { level: 7, key: 'defensive_tactics', name: 'Defensive Tactics', description: 'Choose a defensive technique.' },
       { level: 11, key: 'multiattack', name: 'Multiattack', description: 'Volley or whirlwind attack.' },
       { level: 15, key: 'superior_hunters_defense', name: 'Superior Hunter’s Defense', description: 'Choose an advanced defensive technique.' },

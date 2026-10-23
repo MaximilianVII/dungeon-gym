@@ -211,9 +211,9 @@ export const GIANT_SPIDER: MonsterBlock = {
   passivePerception: 12,
   role: 'skirmisher',
   attacks: [
-    // Bite poisons (disadvantage on the victim's attacks); Web restrains at range.
-    { name: 'Bite', toHit: 5, damage: { count: 1, sides: 8, bonus: 3 }, damageType: 'piercing', range: 1, applies: { condition: 'poisoned', rounds: 3 } },
-    { name: 'Web', toHit: 5, damage: { count: 1, sides: 4, bonus: 0 }, damageType: 'bludgeoning', range: 6, applies: { condition: 'restrained', rounds: 2 } },
+    // SRD bite: 1d8+3 piercing plus 2d8 poison (CON DC 11 for half); Web restrains at range.
+    { name: 'Bite', toHit: 5, damage: { count: 1, sides: 8, bonus: 3 }, damageType: 'piercing', range: 1, rider: { damage: { count: 2, sides: 8, bonus: 0 }, damageType: 'poison', save: 'con', dc: 11 } },
+    { name: 'Web', toHit: 5, damage: { count: 1, sides: 4, bonus: 0 }, damageType: 'bludgeoning', range: 6, applies: { condition: 'restrained', rounds: 2 }, recharge: 5 }, // Recharge 5–6
   ],
 }
 

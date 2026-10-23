@@ -1,6 +1,6 @@
 import type { Vec2 } from '../game/types'
 import { rollD20, type Rng } from './dice'
-import type { Battler, CombatAttack, CombatEvent } from './types'
+import type { Ability, Battler, CombatAttack, CombatEvent } from './types'
 import type { MonsterBlock } from './monsters'
 import { rollAffix, applyAffix } from './affixes'
 import { effectsOf, getSubclass } from './subclasses'
@@ -49,6 +49,8 @@ export interface PlayerSource {
   abilities: string[]
   /** Subclass key, once chosen. */
   subclass?: string
+  /** Saving-throw bonuses (ability mod + proficiency for the class's saves). */
+  saves?: Partial<Record<Ability, number>>
   /** Healing potions carried. */
   potions?: number
   /** Current HP when mid-run (defaults to maxHp). */
@@ -112,6 +114,7 @@ export function buildPlayerBattler(src: PlayerSource, pos: Vec2): Battler {
     charLevel,
   }
   if (src.subclass) battler.subclass = src.subclass
+  if (src.saves) battler.saves = { ...src.saves }
   return battler
 }
 
@@ -123,10 +126,10 @@ export function buildPlayerBattler(src: PlayerSource, pos: Vec2): Battler {
 export function monsterDepthScale(depthIndex: number): { hpMult: number; acBonus: number; hitBonus: number; dmgBonus: number } {
   const t = Math.max(0, depthIndex)
   return {
-    hpMult: 1 + 0.07 * t, // ×1 at floor 1 … ≈×2.7 at floor 25
+    hpMult: 1 + 0.05 * t, // ×1 at floor 1 … ×1.45 at floor 10 … ×2.2 at floor 25
     acBonus: Math.floor(t / 10),
     hitBonus: Math.floor(t / 8),
-    dmgBonus: Math.floor(t / 6),
+    dmgBonus: Math.floor(t / 8),
   }
 }
 
@@ -156,6 +159,7 @@ export function buildEnemyBattler(monster: MonsterBlock, id: string, pos: Vec2, 
     attacks,
     attacksPerAction: Math.max(1, monster.attacksPerAction ?? 1),
     conditions: [],
+    passivePerception: monster.passivePerception,
   }
   if (monster.role) battler.role = monster.role
   // Boss telegraph: build the depth-scaled AoE this boss winds up + bursts.

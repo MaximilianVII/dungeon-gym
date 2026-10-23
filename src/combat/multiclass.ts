@@ -16,6 +16,11 @@ const HIT_DIE: Record<string, number> = {
   sorcerer: 6, wizard: 6,
 }
 
+/** Hit die size of a class (d8 for unknown keys). */
+export function hitDieOf(classKey: string): number {
+  return HIT_DIE[classKey.toLowerCase()] ?? 8
+}
+
 /** 5e multiclass spellcaster table: a full caster contributes its full level,
  *  a half caster contributes half (rounded down). The Warlock's Pact Magic
  *  slots are SEPARATE and do not feed this number. */
