@@ -10,6 +10,7 @@
   },
   "files": [
     "src",
+    "dist",
     "LICENSE",
     "LICENSE-SRD.md"
   ],
@@ -20,12 +21,18 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "coverage": "vitest run --coverage"
+    "coverage": "vitest run --coverage",
+    "build": "node scripts/build.mjs",
+    "cli": "node dist/cli.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",
     "@vitest/coverage-v8": "^3.2.7",
+    "esbuild": "^0.28.2",
     "typescript": "^5.9.3",
     "vitest": "^3.2.7"
+  },
+  "bin": {
+    "dungeon-gym": "dist/cli.mjs"
   }
 }
