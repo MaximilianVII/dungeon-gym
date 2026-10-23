@@ -16,6 +16,8 @@ function fail(message) {
   process.exit(1)
 }
 
+const mode = process.argv[2]
+if (mode !== 'check' && mode !== 'update') fail('usage: node scripts/bench-baseline.mjs <check|update>')
 if (!existsSync(lib)) fail(`${lib} not found — run \`npm run build\` first.`)
 const core = await import(pathToFileURL(lib).href)
 
@@ -41,14 +43,13 @@ function diff(before, after) {
   return rows
 }
 
-const mode = process.argv[2]
 const current = measure()
 
 if (mode === 'update') {
   mkdirSync(dirname(baselinePath), { recursive: true })
   writeFileSync(baselinePath, JSON.stringify(current, null, 2) + '\n')
   process.stdout.write(`wrote bench/baseline.json for ${current.benchmarkId}\n`)
-} else if (mode === 'check') {
+} else {
   if (!existsSync(baselinePath)) fail('bench/baseline.json is missing — run `npm run bench:update` and commit it.')
   const baseline = JSON.parse(readFileSync(baselinePath, 'utf8'))
   const rows = diff(baseline, current)
@@ -66,6 +67,4 @@ if (mode === 'update') {
     )
   }
   process.stdout.write(`bench:check ok — ${Object.keys(current.genomes).length} baseline genomes match ${current.benchmarkId}\n`)
-} else {
-  fail('usage: node scripts/bench-baseline.mjs <check|update>')
 }

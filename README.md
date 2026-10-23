@@ -149,7 +149,9 @@ measures runs per second and `report` prints the balance telemetry
 
 The training job only has `contents: read`; a separate job with
 `contents: write` + `pull-requests: write` opens the PR. Every run is
-reproducible from the commit, seed and generations in the report.
+reproducible from the commit, seed and generations in the report. Because the
+seed is fixed, a night only finds something new when `genomes/` or the rules
+changed since the last run; start it by hand with another `seed` to explore.
 
 ### Repository settings needed
 

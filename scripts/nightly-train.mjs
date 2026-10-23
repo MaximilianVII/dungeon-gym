@@ -20,7 +20,10 @@ const core = await import(pathToFileURL(lib).href)
 const argv = process.argv.slice(2)
 const opt = (name, dflt) => {
   const i = argv.indexOf(`--${name}`)
-  return i >= 0 && argv[i + 1] !== undefined ? argv[i + 1] : dflt
+  if (i < 0) return dflt
+  const v = argv[i + 1]
+  if (v === undefined || v.startsWith('--')) throw new Error(`--${name} needs a value`)
+  return v
 }
 const int = (name, dflt, min) => {
   const n = Number(opt(name, String(dflt)))

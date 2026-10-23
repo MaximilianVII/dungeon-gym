@@ -17,7 +17,10 @@ if (!npmCli) throw new Error('run this through npm: `npm run pack:check`')
 const argv = process.argv.slice(2)
 const opt = (name) => {
   const i = argv.indexOf(`--${name}`)
-  return i >= 0 ? argv[i + 1] : undefined
+  if (i < 0) return undefined
+  const v = argv[i + 1]
+  if (v === undefined || v.startsWith('--')) throw new Error(`--${name} needs a value`)
+  return v
 }
 const dir = opt('dir') ? resolve(opt('dir')) : mkdtempSync(join(tmpdir(), 'dungeon-gym-pack-'))
 mkdirSync(dir, { recursive: true })
