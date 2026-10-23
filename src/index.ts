@@ -36,6 +36,19 @@ export {
 } from './train/trainer'
 export { considerForHallOfFame, type HallOfFame, type HallOfFameEntry, type HallOfFameUpdate, type HallOfFameRejection } from './train/hallOfFame'
 
+// Party training: a team is a fixed line-up of full genomes, scored whole
+export {
+  TEAM_SCHEMA, TEAM_VERSION, MAX_TEAM_SIZE, MAX_TEAM_CHARS, makeTeam, baselineTeam, teamClasses, validateTeam, parseTeam, serializeTeam, teamHash,
+  type Team, type TeamParseResult,
+} from './bot/team'
+export {
+  DEFAULT_PARTY, PARTY_BENCHMARK, PARTY_TRAINER_SCHEMA, PARTY_TRAINER_VERSION, scoreTeamRun, evaluateTeam, benchmarkTeam,
+  makePartyTrainerConfig, createPartyTrainer, pendingPartyTasks, evaluatePartyTask, submitPartyScores, isPartyGenerationComplete,
+  rankTeams, advancePartyGeneration, lastBestTeam, trainPartyGenerations,
+  type TeamEvaluation, type TeamBenchmarkResult, type PartyTrainerConfig, type PartyTrainerState, type TeamIndividual,
+  type PartyGenerationSummary, type PartyEvalTask, type PartySubmitOutcome,
+} from './train/party'
+
 // Characters
 export {
   CLASS_KEYS, STARTING_LEVEL, MAX_CHARACTER_LEVEL, WEAPONS, ARMOR, isClassKey, validateCharacterSpec, buildCharacter, starterSpec, starterCharacter, spellsForBuild, abilityMod,

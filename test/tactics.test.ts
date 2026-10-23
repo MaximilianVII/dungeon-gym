@@ -151,6 +151,23 @@ describe('bot turns with the new options', () => {
     expect(held.hp).toBeLessThan(100)
   })
 
+  it('a guard (protectAllies) goes for the foe on a badly hurt party-mate', () => {
+    const run = (protectAllies: number): { near: Battler; onMate: Battler } => {
+      const f = player('fighter', { x: 5, y: 4 })
+      const mate = player('wizard', { x: 2, y: 4 }, 'p1')
+      mate.hp = 3
+      const near = monster('orc', { x: 6, y: 4 }, 100)
+      const onMate = monster('orc', { x: 3, y: 4 }, 100)
+      turn(f, [f, mate, near, onMate], genes({ protectAllies, focusWeakest: false, focusCasters: 0, actionSurgeEarly: false }))
+      return { near, onMate }
+    }
+    const guard = run(1)
+    expect(guard.onMate.hp).toBeLessThan(100)
+    expect(guard.near.hp).toBe(100)
+    const plain = run(0)
+    expect(plain.near.hp).toBeLessThan(100)
+  })
+
   it('does not heal when the heal cannot outpace the damage coming in', () => {
     const b = player('bard', { x: 5, y: 4 })
     b.attacks = b.attacks.filter((a) => a.name !== 'Healing Word')

@@ -4,7 +4,7 @@ import { tileDistance } from '../game/logic'
 import { rollDamage, type DamageDice, type Rng } from './dice'
 import { getMonster } from './monsters'
 import { buildEnemyBattler } from './setup'
-import { isHelpless, savingThrow, setTimedCondition } from './resolve'
+import { isHelpless, saveSucceeds, setTimedCondition } from './resolve'
 import { spendSlot } from './slots'
 import { addCondition, hasCondition, removeCondition, type Battler, type CombatAttack, type CombatEvent, type Condition } from './types'
 
@@ -66,7 +66,7 @@ export function castPattern(rng: Rng, caster: Battler, attack: CombatAttack, cen
   const dc = spellSaveDc(attack)
   let caught = 0
   for (const t of patternTargets(center, battlers, c.radius).filter((x) => x !== caster)) {
-    if (savingThrow(rng, t, c.save) >= dc) continue
+    if (saveSucceeds(rng, t, c.save, dc)) continue
     setTimedCondition(t, 'incapacitated', MINUTE_ROUNDS)
     ;(t.condSource ??= {}).incapacitated = caster.id
     events.push({ kind: 'condition', who: t.name, condition: 'incapacitated' })
@@ -171,7 +171,7 @@ export function endOfTurnSaves(rng: Rng, b: Battler, events: CombatEvent[] = [])
       clearCondition(b, cond as Condition)
       continue
     }
-    if (savingThrow(rng, b, save.ability) >= save.dc) {
+    if (saveSucceeds(rng, b, save.ability, save.dc)) {
       clearCondition(b, cond as Condition)
       events.push({ kind: 'condition', who: b.name, condition: `${cond} ended` })
     }
@@ -189,7 +189,7 @@ export function castHold(rng: Rng, caster: Battler, attack: CombatAttack, target
   const dc = spellSaveDc(attack)
   let held = 0
   for (const t of targets.filter((x) => canHold(attack, x)).slice(0, holdTargetCount(slotLevel))) {
-    if (savingThrow(rng, t, c.save) >= dc) continue
+    if (saveSucceeds(rng, t, c.save, dc)) continue
     setTimedCondition(t, 'paralyzed', MINUTE_ROUNDS)
     ;(t.condSource ??= {}).paralyzed = caster.id
     ;(t.saveEnds ??= {}).paralyzed = { ability: c.save, dc }

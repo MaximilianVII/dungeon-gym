@@ -3,7 +3,7 @@ import {
   canHold, castControl, castHold, castPattern, castSleep, clearCondition, conjureBeasts, conjureCount, endConcentration,
   endOfTurnSaves, enforceConcentration, holdTargetCount, isDormant, isIncapacitated, markedBy, placeMark, sleepPool, sleepVictims,
 } from '../src/combat/control'
-import { applyDamage, combatMode, grantTempHp, pushAway, resolveAttack, savingThrow } from '../src/combat/resolve'
+import { applyDamage, combatMode, grantTempHp, pushAway, resolveAttack, saveSucceeds, savingThrow } from '../src/combat/resolve'
 import { castingLevel, naturalRecovery, upcast } from '../src/combat/slots'
 import { buildEnemyBattler, buildPlayerBattler } from '../src/combat/setup'
 import { getMonster } from '../src/combat/monsters'
@@ -359,6 +359,20 @@ describe('pushes, beams, upcasting, temporary HP', () => {
     expect(hasCondition(p, 'unconscious')).toBe(false)
     expect(p.deathSaves).toEqual({ successes: 0, failures: 0, stable: false, dead: false })
     expect(healBattler(p, 1000)).toBe(p.maxHp - 5)
+  })
+
+  it('Bardic Inspiration rescues a failed saving throw when the die can make it', () => {
+    const p = player('fighter', { x: 1, y: 4 })
+    p.conditions.push('inspired')
+    p.inspirationDie = 8
+    // CON save: d20 8 + 5 = 13 < 15, the d8 adds 4 → 17.
+    expect(saveSucceeds(scriptRng([[8, 20], [4, 8]]), p, 'con', 15)).toBe(true)
+    expect(hasCondition(p, 'inspired')).toBe(false)
+    // Hopeless (13 + 8 < 30): the die is kept.
+    p.conditions.push('inspired')
+    p.inspirationDie = 8
+    expect(saveSucceeds(scriptRng([[8, 20]]), p, 'con', 30)).toBe(false)
+    expect(hasCondition(p, 'inspired')).toBe(true)
   })
 
   it('clearCondition drops the condition with its timer, source and save', () => {

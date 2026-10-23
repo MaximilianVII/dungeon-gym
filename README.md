@@ -63,6 +63,30 @@ For distributed training, use `pendingTasks` → `evaluateTask` (anywhere, e.g. 
 worker) → `submitScores` → `advanceGeneration`; late or duplicate results are
 rejected, never mis-credited.
 
+### Parties
+
+A **team** is a fixed line-up of full genomes (`{ schema: 'dungeon-gym/team',
+version: 1, members: [genome, …] }`, 1–5 members, strictly validated). Party
+training selects whole teams: every member plays every run, nothing is
+re-mixed per run; breeding mutates each member and crosses two teams slot by
+slot.
+
+```ts
+import { baselineTeam, createPartyTrainer, trainPartyGenerations, lastBestTeam, benchmarkTeam } from 'dungeon-gym-core'
+
+const team = baselineTeam(['fighter', 'cleric', 'wizard', 'rogue'])
+let party = createPartyTrainer({ classKeys: ['fighter', 'cleric', 'wizard', 'rogue'], seed: 1 })
+party = trainPartyGenerations(party, 10)       // or pendingPartyTasks → submitPartyScores → advancePartyGeneration
+console.log(lastBestTeam(party), benchmarkTeam(team).score)
+```
+
+The party benchmark (`PARTY_BENCHMARK`, id `dungeon-gym/party-bench-v1@…`) is
+32 fixed seeds × 15 levels; a team's score is its members' mean fitness. Role
+genes act in a party: `healAllies` (heal and pick up downed party-mates, Healing
+Word as a bonus action), `protectAllies` (go for foes on a badly hurt
+party-mate), `aggression` (stance and retreat), and Bardic Inspiration (the
+die rescues a missed attack or a failed save).
+
 ## Train from the command line
 
 ```bash
@@ -81,9 +105,19 @@ node dist/cli.mjs bench wizard.json
 node dist/cli.mjs validate wizard.json
 ```
 
-`train` runs on `worker_threads`; its result depends only on its options, never
-on `--workers`. `bench` without a file scores the 12 baseline genomes, `speed`
-measures runs per second and `report` prints the balance telemetry
+```bash
+node dist/cli.mjs train-party --classes fighter,cleric,wizard,rogue --generations 20 --workers 8 --seed 1 --out party.json
+```
+
+```bash
+node dist/cli.mjs bench-party party.json
+```
+
+`train` and `train-party` run on `worker_threads`; their results depend only on
+their options, never on `--workers`. `bench` without a file scores the 12
+baseline genomes, `bench-party` without a file the baseline team of
+`--classes` (default fighter, cleric, wizard, rogue), `validate` checks a genome
+or a team, `speed` measures runs per second and `report` prints the balance telemetry
 (see `docs/balance.md`, `docs/performance.md`).
 
 ## Layout
@@ -95,7 +129,7 @@ measures runs per second and `report` prints the balance telemetry
 | `src/combat/` | dice, attack resolution, monsters, spells, control spells and concentration, spell slots, subclasses, multiclassing, monster and boss AI |
 | `src/character/` | SRD-table character builder and the 12 starting characters |
 | `src/bot/` | genome schema, bot combat policy and tactics, the run state machine, reward |
-| `src/train/` | evaluation, benchmark, trainer, hall of fame |
+| `src/train/` | evaluation, benchmark, trainer, party trainer and party benchmark, hall of fame |
 | `docs/genome-audit.md` | audit of the legacy genome/learning logic and what changed |
 | `docs/balance.md` | per-class benchmark and telemetry across rules versions |
 

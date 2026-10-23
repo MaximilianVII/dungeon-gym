@@ -4,6 +4,7 @@ import {
   createRun, stepRun, isRunDone, runResult, runSnapshot, playRun,
   createTrainer, trainGenerations, lastBest,
   benchmarkGenome, considerForHallOfFame, BENCHMARK, CORE_VERSION,
+  baselineTeam, createPartyTrainer, trainPartyGenerations, lastBestTeam, benchmarkTeam, PARTY_BENCHMARK,
   type Benchmark,
 } from '../src/index'
 
@@ -32,5 +33,13 @@ describe('README usage', () => {
     const { hall, crowned } = considerForHallOfFame({}, genome, quick)
     expect(crowned).toBe(true)
     expect(hall.wizard?.benchmarkId).toContain(CORE_VERSION)
+  })
+
+  it('party training works through src/index.ts', () => {
+    const team = baselineTeam(['fighter', 'cleric'])
+    let party = createPartyTrainer({ classKeys: ['fighter', 'cleric'], seed: 1, populationSize: 3, seedsPerGeneration: 1, depth: 1 })
+    party = trainPartyGenerations(party, 1)
+    expect(lastBestTeam(party)?.generation).toBe(0)
+    expect(benchmarkTeam(team, { ...PARTY_BENCHMARK, seeds: [1], depth: 1 }).benchmarkId).toContain(CORE_VERSION)
   })
 })

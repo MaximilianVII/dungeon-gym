@@ -4,6 +4,41 @@ All numbers: the official benchmark (32 fixed seeds × 10 floors, outcome-only
 reward), baseline genome of each class, solo. Reproduce with
 `node dist/cli.mjs report` (telemetry) and `node dist/cli.mjs bench`.
 
+## 0.4.0 → 0.5.0: parties
+
+Solo results are unchanged (the solo benchmark is identical run for run);
+everything below only acts when a bot has party-mates.
+
+Party benchmark (`node dist/cli.mjs bench-party`): 32 fixed seeds × **15**
+levels (a party clears 10 levels almost every run, so 10 would not separate
+line-ups), outcome-only reward, team score = mean member fitness.
+
+| line-up | baseline | wins | trained (20 gen) | wins |
+|---|---|---|---|---|
+| fighter, cleric, wizard, rogue | 185.8 | 13 | 211.0 | 20 |
+
+Trained with `node dist/cli.mjs train-party --generations 20 --seed 1`
+(population 8, 8 seeds per generation, hold-out selection on 32 seeds).
+
+Role genes, measured on the party benchmark (baseline genes otherwise):
+
+| line-up and change | score | wins |
+|---|---|---|
+| fighter, cleric, wizard, rogue — baseline | 185.8 | 13 |
+| … cleric `healAllies` 0 (no ally heals) | 159.3 | 6 |
+| … every member `protectAllies` 0 (no guarding) | 179.9 | 12 |
+| fighter, bard, wizard, rogue — baseline (bard inspires) | 163.2 | 8 |
+| … bard `inspireBeforeAttack` off | 150.2 | 4 |
+
+- `healAllies`: Healing Word (a bonus action) picks a downed party-mate back
+  up, else mends one below the gene's threshold; Cure Wounds as the action,
+  stepping up to a downed ally if needed.
+- `protectAllies`: with that probability per turn, the bot goes for a foe
+  next to a party-mate below half HP that it can reach or shoot this turn.
+- `aggression`: stance (less kiting) and a lower retreat threshold.
+- Bardic Inspiration: the die rescues a missed attack or (new) a failed
+  saving throw, spent only when it can still help.
+
 ## 0.3.0 → 0.4.0: encounter groups and control spells
 
 | class | score 0.3.0 | wins 0.3.0 | score 0.4.0 | wins 0.4.0 |

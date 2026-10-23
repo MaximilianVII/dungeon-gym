@@ -37,7 +37,7 @@ export function setTimedCondition(target: Battler, condition: Condition, rounds:
  */
 function checkConcentration(target: Battler, damage: number, events: CombatEvent[], rng?: Rng): void {
   if (!target.concentration || damage <= 0) return
-  const kept = target.hp > 0 && (!rng || savingThrow(rng, target, 'con') >= Math.max(10, Math.floor(damage / 2)))
+  const kept = target.hp > 0 && (!rng || saveSucceeds(rng, target, 'con', Math.max(10, Math.floor(damage / 2))))
   if (kept) return
   events.push({ kind: 'condition', who: target.name, condition: `lost concentration (${target.concentration})` })
   delete target.concentration
@@ -172,6 +172,21 @@ export function grantTempHp(b: Battler, amount: number): void {
 function onDrop(attacker: Battler, target: Battler, wasUp: boolean): void {
   if (!wasUp || target.hp > 0 || target.team === attacker.team || !findEffect(attacker, 'darkOnesBlessing')) return
   grantTempHp(attacker, Math.max(1, (attacker.abilityMods?.cha ?? 0) + (attacker.classLevels?.warlock ?? 0)))
+}
+
+/**
+ * A saving throw against `dc`. A creature holding Bardic Inspiration that
+ * would fail — but could still make it with the die — adds the die (SRD: the
+ * die may go on a saving throw; it is spent only when it can help).
+ */
+export function saveSucceeds(rng: Rng, b: Battler, ability: Ability, dc: number): boolean {
+  const total = savingThrow(rng, b, ability)
+  if (total >= dc) return true
+  const die = b.inspirationDie ?? 6
+  if (!hasCondition(b, 'inspired') || total + die < dc) return false
+  removeCondition(b, 'inspired')
+  delete b.inspirationDie
+  return total + rollDie(rng, die) >= dc
 }
 
 /** Sneak Attack dice by rogue level (SRD: 1d6 per two levels, rounded up). */
@@ -332,7 +347,7 @@ function attackOnce(
   if (attack.rider && target.hp > 0) {
     const r = attack.rider
     const extra = rollDamage(rng, r.damage, false).total
-    const saved = savingThrow(rng, target, r.save) >= r.dc
+    const saved = saveSucceeds(rng, target, r.save, r.dc)
     applyDamage(target, saved ? Math.floor(extra / 2) : extra, false, events, rng)
   }
   // Vampiric elite: the attacker heals for part of the damage it dealt.
@@ -389,10 +404,10 @@ export function resolveAreaAttack(
       if (sculpt) events.push({ kind: 'ability', who: t.name, ability: 'Sculpted (0 damage)' })
       continue
     }
-    let saved = savingThrow(rng, t, 'dex') >= dc
+    let saved = saveSucceeds(rng, t, 'dex', dc)
     // Warlock Fiend — Dark One's Own Luck (simplified): reroll one failed save per fight.
     if (!saved && !t.darkOneLuckUsed && findEffect(t, 'darkOneLuck')) {
-      saved = savingThrow(rng, t, 'dex') >= dc
+      saved = saveSucceeds(rng, t, 'dex', dc)
       t.darkOneLuckUsed = true
     }
     const wasUp = t.hp > 0

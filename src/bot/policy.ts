@@ -320,6 +320,11 @@ function playTurn(bot: Battler, battlers: Battler[], map: GameMap, rng: Rng, dec
   const reserveSlots = decide() < genes.slotReserve
   const regroupNow = decide() < genes.regroup
   const rangedStance = decide() < effKite
+  // Guard (party only — no draw solo): with probability protectAllies this
+  // turn, go for a foe standing next to a badly hurt party-mate (below half
+  // HP) that the bot can reach or shoot this turn.
+  const mates = healableAllies(battlers, bot)
+  const guardNow = mates.length > 0 && decide() < genes.protectAllies
   const res = bot.resources ?? { rage: 0, secondWind: 0, actionSurge: 0, inspiration: 0, wildShape: 0 }
 
   let movement = hasCondition(bot, 'restrained') ? 0 : bot.speedTiles
@@ -575,6 +580,14 @@ function playTurn(bot: Battler, battlers: Battler[], map: GameMap, rng: Rng, dec
     b.role === 'caster' || b.role === 'healer' ||
     b.attacks.some((a) => a.source === 'heal' || a.source === 'spell' || a.source === 'cantrip')
   const pick = (cands: Battler[]): Battler => {
+    if (guardNow) {
+      const hurt = mates.filter((m) => m.hp < m.maxHp / 2)
+      const shot = ranged.length > 0 ? ranged[0].range : 0
+      const threats = cands.filter((f) =>
+        hurt.some((m) => tileDistance(m.pos, f.pos) <= 1) &&
+        (tileDistance(bot.pos, f.pos) <= Math.max(movement + 1, shot)))
+      if (threats.length > 0) return genes.focusWeakest ? weakest(threats)! : nearest(bot.pos, threats)!
+    }
     if (preferCasters) {
       const threats = cands.filter(isPriorityFoe)
       if (threats.length > 0) return genes.focusWeakest ? weakest(threats)! : nearest(bot.pos, threats)!

@@ -1,17 +1,23 @@
 import { Worker } from 'node:worker_threads'
 import { evaluateGenome } from '../src/train/evaluate'
 import { advanceGeneration, pendingTasks, submitScores, type TrainerState } from '../src/train/trainer'
+import { advancePartyGeneration, evaluateTeam, pendingPartyTasks, submitPartyScores, type PartyTrainerState } from '../src/train/party'
 import type { Genome } from '../src/bot/genome'
+import type { Team } from '../src/bot/team'
 import type { RewardConfig } from '../src/bot/reward'
 
 // ---------------------------------------------------------------------------
-// Parallel evaluation for the Node trainer. The unit of work is ONE run
-// (genome × seed); results are placed back by index, so the outcome never
-// depends on how many workers there are or in which order they finish.
+// Parallel evaluation for the Node trainers. The unit of work is ONE run
+// (genome × seed, or a whole team × seed); results are placed back by index,
+// so the outcome never depends on how many workers there are or in which
+// order they finish.
 // ---------------------------------------------------------------------------
 
 export interface EvalUnit {
-  genome: Genome
+  /** The genome played solo — or, with `team`, ignored. */
+  genome?: Genome
+  /** A whole team played together (party training); scored as a team. */
+  team?: Team
   seed: number
   depth: number
   reward: RewardConfig
@@ -29,7 +35,13 @@ export interface Evaluator {
 
 /** Play and score one unit (what a worker does). */
 export function scoreUnit(u: EvalUnit): UnitResult {
-  const ev = evaluateGenome(u.genome, { seeds: [u.seed], depth: u.depth, reward: u.reward })
+  const opts = { seeds: [u.seed], depth: u.depth, reward: u.reward }
+  if (u.team) {
+    const ev = evaluateTeam(u.team, opts)
+    return { score: ev.scores[0], won: ev.results[0].won }
+  }
+  if (!u.genome) throw new Error('scoreUnit: a unit needs a genome or a team')
+  const ev = evaluateGenome(u.genome, opts)
   return { score: ev.scores[0], won: ev.results[0].won }
 }
 
@@ -83,6 +95,32 @@ export function createWorkerPool(size: number, workerUrl: URL): Evaluator {
       await Promise.all(workers.map((w) => w.terminate()))
     },
   }
+}
+
+/** Party training: evaluate + advance `generations` times with any evaluator. */
+export async function trainPartyWith(
+  state: PartyTrainerState,
+  generations: number,
+  evaluator: Evaluator,
+  onGeneration?: (s: PartyTrainerState) => void,
+): Promise<PartyTrainerState> {
+  let s = state
+  for (let g = 0; g < generations; g++) {
+    const tasks = pendingPartyTasks(s)
+    const units = tasks.flatMap((t) => t.seeds.map((seed) => ({ team: t.team, seed, depth: t.depth, reward: t.reward })))
+    const results = await evaluator.evaluate(units)
+    let k = 0
+    for (const t of tasks) {
+      const scores = results.slice(k, k + t.seeds.length).map((r) => r.score)
+      k += t.seeds.length
+      const res = submitPartyScores(s, { generation: t.generation, individualId: t.individualId, scores })
+      if (res.error) throw new Error(`submission rejected: ${res.error}`)
+      s = res.state
+    }
+    s = advancePartyGeneration(s)
+    onGeneration?.(s)
+  }
+  return s
 }
 
 /** Evaluate + advance `generations` times with any evaluator. */

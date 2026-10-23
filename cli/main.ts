@@ -9,7 +9,10 @@ import { BENCHMARK, mean } from '../src/train/evaluate'
 import { createTrainer, lastBest, type TrainerState } from '../src/train/trainer'
 import { CORE_VERSION } from '../src/version'
 import { deriveSeed } from '../src/rng'
-import { createInlineEvaluator, createWorkerPool, trainWith, type EvalUnit, type Evaluator } from './pool'
+import { createInlineEvaluator, createWorkerPool, trainPartyWith, trainWith, type EvalUnit, type Evaluator } from './pool'
+import { baselineTeam, parseTeam, serializeTeam, teamClasses, teamHash, type Team } from '../src/bot/team'
+import { createPartyTrainer, DEFAULT_PARTY, lastBestTeam, PARTY_BENCHMARK, type PartyTrainerState } from '../src/train/party'
+import type { ClassKey } from '../src/character/build'
 
 // ---------------------------------------------------------------------------
 // dungeon-gym CLI:
@@ -17,9 +20,12 @@ import { createInlineEvaluator, createWorkerPool, trainWith, type EvalUnit, type
 //         [--population 8] [--seeds 6] [--depth 10] [--reward benchmark|default]
 //         [--init genome.json] [--curve curve.csv] [--state trainer.json] [--validate-seeds 32]
 //   bench <genome.json> [--workers K]
-//   validate <genome.json>
+//   train-party [--classes fighter,cleric,wizard,rogue] [--init team.json] [--out team.json]
+//               (+ the train options; --depth defaults to the party benchmark's)
+//   bench-party [team.json | --classes …] [--workers K]
+//   validate <genome.json | team.json>
 //   speed [--workers K] [--runs 200]
-// The result of `train` depends only on its options — never on --workers.
+// The result of `train` / `train-party` depends only on its options — never on --workers.
 // ---------------------------------------------------------------------------
 
 type Args = { _: string[]; [flag: string]: string | boolean | string[] }
@@ -58,6 +64,20 @@ function readGenome(path: string): Genome {
   const res = parseGenome(readFileSync(path, 'utf8'))
   if (!res.ok) throw new Error(`${path}: invalid genome\n  ${res.errors.join('\n  ')}`)
   return res.genome
+}
+
+function readTeam(path: string): Team {
+  const res = parseTeam(readFileSync(path, 'utf8'))
+  if (!res.ok) throw new Error(`${path}: invalid team\n  ${res.errors.join('\n  ')}`)
+  return res.team
+}
+
+function classesArg(args: Args): ClassKey[] {
+  const raw = str(args, 'classes')
+  const keys = raw ? raw.split(',').map((s) => s.trim()) : [...DEFAULT_PARTY]
+  for (const k of keys) if (!isClassKey(k)) throw new Error(`--classes: unknown class "${k}" (one of ${CLASS_KEYS.join(', ')})`)
+  if (keys.length < 1 || keys.length > 5) throw new Error('--classes: 1–5 classes')
+  return keys as ClassKey[]
 }
 
 function evaluatorFor(workers: number): Evaluator {
@@ -129,6 +149,81 @@ async function train(args: Args): Promise<void> {
   log(`wrote ${out} (${genomeHash(genome)})`)
 }
 
+async function trainParty(args: Args): Promise<void> {
+  const init = str(args, 'init')
+  const initial = init ? [readTeam(init)] : []
+  const classKeys = initial[0] ? teamClasses(initial[0]) : classesArg(args)
+  const workers = num(args, 'workers', availableParallelism())
+  let state: PartyTrainerState = createPartyTrainer({
+    classKeys,
+    seed: num(args, 'seed', 1),
+    populationSize: num(args, 'population', 8),
+    seedsPerGeneration: num(args, 'seeds', 8),
+    depth: num(args, 'depth', PARTY_BENCHMARK.depth),
+    reward: str(args, 'reward') === 'default' ? DEFAULT_REWARD : BENCHMARK_REWARD,
+  }, initial)
+  const evaluator = evaluatorFor(workers)
+  const curve = ['generation,best_mean,population_mean']
+  const t0 = performance.now()
+  let runs = 0
+  const candidates = new Map<string, Team>()
+  let team: Team
+  let validationMean = -Infinity
+  try {
+    state = await trainPartyWith(state, num(args, 'generations', 20), evaluator, (s) => {
+      const h = lastBestTeam(s)!
+      const t = s.population.find((i) => i.id === h.bestId)?.team
+      if (t) candidates.set(teamHash(t), t)
+      runs += s.config.populationSize * s.config.seedsPerGeneration
+      curve.push(`${h.generation},${h.bestMean.toFixed(3)},${h.populationMean.toFixed(3)}`)
+      const rate = runs / ((performance.now() - t0) / 1000)
+      log(`gen ${String(h.generation).padStart(3)}  best ${h.bestMean.toFixed(1).padStart(6)}  mean ${h.populationMean.toFixed(1).padStart(6)}  (${rate.toFixed(0)} party runs/s)`)
+    })
+    // Hold-out selection, as for `train`: re-score each generation's best team.
+    const vSeeds = Array.from({ length: num(args, 'validate-seeds', 32) }, (_, i) => deriveSeed(state.config.seed, `party-validation:${i}`))
+    const list = [...candidates.values()]
+    const units = list.flatMap((t) => vSeeds.map((seed) => ({ team: t, seed, depth: state.config.depth, reward: state.config.reward })))
+    const results = await evaluator.evaluate(units)
+    team = list[0]
+    list.forEach((t, i) => {
+      const m = mean(results.slice(i * vSeeds.length, (i + 1) * vSeeds.length).map((r) => r.score))
+      if (m >= validationMean) {
+        validationMean = m
+        team = t
+      }
+    })
+  } finally {
+    await evaluator.close()
+  }
+  log(`selected on ${candidates.size} candidates, validation mean ${validationMean.toFixed(1)}`)
+  const out = str(args, 'out') ?? `${classKeys.join('-')}.team.json`
+  writeFileSync(out, serializeTeam(team) + '\n')
+  const curveFile = str(args, 'curve')
+  if (curveFile) writeFileSync(curveFile, curve.join('\n') + '\n')
+  const stateFile = str(args, 'state')
+  if (stateFile) writeFileSync(stateFile, JSON.stringify(state) + '\n')
+  log(`wrote ${out} (${teamHash(team)})`)
+}
+
+async function benchParty(args: Args): Promise<void> {
+  const path = args._[1]
+  const team = path ? readTeam(path) : baselineTeam(classesArg(args))
+  const evaluator = evaluatorFor(num(args, 'workers', availableParallelism()))
+  try {
+    const units: EvalUnit[] = PARTY_BENCHMARK.seeds.map((seed) => ({ team, seed, depth: PARTY_BENCHMARK.depth, reward: PARTY_BENCHMARK.reward }))
+    const results = await evaluator.evaluate(units)
+    log(JSON.stringify({
+      benchmarkId: PARTY_BENCHMARK.id,
+      classKeys: teamClasses(team),
+      teamHash: teamHash(team),
+      score: Number(mean(results.map((r) => r.score)).toFixed(3)),
+      wins: results.filter((r) => r.won).length,
+    }))
+  } finally {
+    await evaluator.close()
+  }
+}
+
 async function benchmarkScores(genome: Genome, workers: number): Promise<{ scores: number[]; wins: number }> {
   const evaluator = evaluatorFor(workers)
   try {
@@ -153,8 +248,18 @@ async function bench(args: Args): Promise<void> {
 
 function validate(args: Args): void {
   const path = args._[1]
-  if (!path) throw new Error('usage: validate <genome.json>')
-  const res = parseGenome(readFileSync(path, 'utf8'))
+  if (!path) throw new Error('usage: validate <genome.json | team.json>')
+  const text = readFileSync(path, 'utf8')
+  if (text.includes('"dungeon-gym/team"')) {
+    const res = parseTeam(text)
+    if (res.ok) log(`ok team ${teamClasses(res.team).join(',')} ${teamHash(res.team)}`)
+    else {
+      log(`invalid:\n  ${res.errors.join('\n  ')}`)
+      process.exitCode = 1
+    }
+    return
+  }
+  const res = parseGenome(text)
   if (res.ok) log(`ok ${res.genome.classKey} ${genomeHash(res.genome)}`)
   else {
     log(`invalid:\n  ${res.errors.join('\n  ')}`)
@@ -206,11 +311,13 @@ async function main(argv: string[]): Promise<void> {
   switch (args._[0]) {
     case 'train': return train(args)
     case 'bench': return bench(args)
+    case 'train-party': return trainParty(args)
+    case 'bench-party': return benchParty(args)
     case 'validate': return validate(args)
     case 'speed': return speed(args)
     case 'report': return report()
     default:
-      log('usage: dungeon-gym <train|bench|validate|speed|report> [options] (see cli/main.ts)')
+      log('usage: dungeon-gym <train|bench|train-party|bench-party|validate|speed|report> [options] (see cli/main.ts)')
       process.exitCode = args._[0] ? 1 : 0
   }
 }

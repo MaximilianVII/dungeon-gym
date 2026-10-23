@@ -123,7 +123,8 @@ export function makeTrainerConfig(opts: Partial<TrainerConfig> & { classKey: Cla
   }
 }
 
-function drawSeeds(rng: Rng, n: number): number[] {
+/** `n` fresh 32-bit dungeon seeds from the trainer RNG. */
+export function drawSeeds(rng: Rng, n: number): number[] {
   return Array.from({ length: n }, () => Math.floor(rng() * 4294967296) >>> 0)
 }
 
@@ -206,7 +207,8 @@ export function rankPopulation(state: TrainerState): { individual: Individual; m
     .sort((a, b) => (a.mean !== b.mean ? (b.mean > a.mean ? 1 : -1) : a.individual.id - b.individual.id))
 }
 
-function tournament(ranked: { individual: Individual; mean: number }[], size: number, rng: Rng): Individual {
+/** Tournament selection: the best of `size` random picks (ties to the lower id). */
+export function tournament<T extends { id: number }>(ranked: { individual: T; mean: number }[], size: number, rng: Rng): T {
   let best = ranked[Math.floor(rng() * ranked.length)]
   for (let i = 1; i < size; i++) {
     const c = ranked[Math.floor(rng() * ranked.length)]
