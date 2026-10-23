@@ -1,4 +1,5 @@
 import { rollDie, type Rng } from '../combat/dice'
+import { deepFreeze } from '../freeze'
 
 // ---------------------------------------------------------------------------
 // Artifacts — the run's power progression. Clearing a level offers a choice of
@@ -24,7 +25,7 @@ export interface Artifact {
   effect: ArtifactEffect
 }
 
-export const ARTIFACTS: Artifact[] = [
+export const ARTIFACTS: Artifact[] = deepFreeze([
   { key: 'iron-charm', name: 'Iron Charm', rarity: 'common', effect: { maxHp: 4 } },
   { key: 'whetstone', name: 'Whetstone', rarity: 'common', effect: { damageBonus: 1 } },
   { key: 'swift-boots', name: 'Swift Boots', rarity: 'common', effect: { speed: 10 } },
@@ -34,7 +35,7 @@ export const ARTIFACTS: Artifact[] = [
   { key: 'giants-vigor', name: 'Giant’s Vigor', rarity: 'rare', effect: { maxHp: 12 } },
   { key: 'slayers-mark', name: 'Slayer’s Mark', rarity: 'very-rare', effect: { toHit: 2, damageBonus: 1 } },
   { key: 'heart-mountain', name: 'Heart of the Mountain', rarity: 'legendary', effect: { maxHp: 20, ac: 1 } },
-]
+])
 
 export function getArtifact(key: string): Artifact | undefined {
   return ARTIFACTS.find((a) => a.key === key)
@@ -65,8 +66,12 @@ export function drawRewards(rng: Rng, levelIndex: number, owned: readonly string
   return picks
 }
 
-/** Fixed survival-first scoring a bot uses to pick one artifact. */
-export function artifactScore(a: Artifact): number {
-  const e = a.effect
+/** Fixed survival-first scoring of a flat effect (artifacts and trinkets). */
+export function effectScore(e: ArtifactEffect): number {
   return (e.maxHp ?? 0) + (e.ac ?? 0) * 6 + (e.toHit ?? 0) * 2 + (e.damageBonus ?? 0) * 2 + (e.speed ?? 0) * 0.2
+}
+
+/** The score a bot uses to pick one artifact. */
+export function artifactScore(a: Artifact): number {
+  return effectScore(a.effect)
 }

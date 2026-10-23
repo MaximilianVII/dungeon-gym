@@ -177,13 +177,17 @@ export function evaluateTask(task: EvalTask): number[] {
   return evaluateGenome(task.genome, { seeds: task.seeds, depth: task.depth, reward: task.reward }).scores
 }
 
+/** Largest |fitness| accepted from a submission; anything beyond is malformed. */
+export const MAX_ABS_SCORE = 1e9
+
 /** Record scores for one individual. Stale/unknown/duplicate/malformed submissions are rejected. */
 export function submitScores(state: TrainerState, sub: ScoreSubmission): SubmitOutcome {
+  if (typeof sub !== 'object' || sub === null) return { state, error: 'bad-scores' }
   if (sub.generation !== state.generation) return { state, error: 'stale-generation' }
   const idx = state.population.findIndex((ind) => ind.id === sub.individualId)
   if (idx < 0) return { state, error: 'unknown-individual' }
   if (state.population[idx].scores !== null) return { state, error: 'already-scored' }
-  if (!Array.isArray(sub.scores) || sub.scores.length !== state.seeds.length || !sub.scores.every((x) => typeof x === 'number' && Number.isFinite(x))) {
+  if (!Array.isArray(sub.scores) || sub.scores.length !== state.seeds.length || !sub.scores.every((x) => typeof x === 'number' && Number.isFinite(x) && Math.abs(x) <= MAX_ABS_SCORE)) {
     return { state, error: 'bad-scores' }
   }
   const next = clone(state)
@@ -199,7 +203,7 @@ export function isGenerationComplete(state: TrainerState): boolean {
 export function rankPopulation(state: TrainerState): { individual: Individual; mean: number }[] {
   return state.population
     .map((individual) => ({ individual, mean: individual.scores ? mean(individual.scores) : -Infinity }))
-    .sort((a, b) => b.mean - a.mean || a.individual.id - b.individual.id)
+    .sort((a, b) => (a.mean !== b.mean ? (b.mean > a.mean ? 1 : -1) : a.individual.id - b.individual.id))
 }
 
 function tournament(ranked: { individual: Individual; mean: number }[], size: number, rng: Rng): Individual {

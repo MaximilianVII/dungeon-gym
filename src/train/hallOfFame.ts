@@ -1,12 +1,12 @@
 import type { ClassKey } from '../character/build'
-import { genomeHash, validateGenome, type Genome } from '../bot/genome'
-import { BENCHMARK, type BenchmarkResult } from './evaluate'
+import { validateGenome, type Genome } from '../bot/genome'
+import { BENCHMARK, benchmarkGenome, type Benchmark, type BenchmarkResult } from './evaluate'
 
 // ---------------------------------------------------------------------------
 // Hall of Fame — the best genome per class, judged ONLY by its own benchmark
-// score (mean over the fixed benchmark seeds). A candidate is accepted only
-// with a BenchmarkResult that matches it (same genome hash, class and
-// benchmark id), so a recorded score always belongs to the recorded genome.
+// score. The score is always recomputed here (the benchmark is deterministic
+// and cheap), never taken from the caller, so a recorded score always belongs
+// to the recorded genome and cannot be forged.
 // Plain JSON; functions return a new hall and never mutate the input.
 // ---------------------------------------------------------------------------
 
@@ -21,37 +21,36 @@ export interface HallOfFameEntry {
 
 export type HallOfFame = Partial<Record<ClassKey, HallOfFameEntry>>
 
-export type HallOfFameRejection = 'invalid-genome' | 'hash-mismatch' | 'class-mismatch' | 'wrong-benchmark' | 'not-better'
+export type HallOfFameRejection = 'invalid-genome' | 'not-better'
 
 export interface HallOfFameUpdate {
   hall: HallOfFame
   crowned: boolean
+  /** The genome's freshly computed benchmark result (absent for an invalid genome). */
+  result?: BenchmarkResult
   reason?: HallOfFameRejection
 }
 
-/** Crown `genome` for its class if its benchmark score beats the incumbent (ties keep the incumbent). */
-export function considerForHallOfFame(
-  hall: HallOfFame,
-  genome: Genome,
-  bench: BenchmarkResult,
-  benchmarkId: string = BENCHMARK.id,
-): HallOfFameUpdate {
+/**
+ * Benchmark `genome` and crown it for its class if it beats the incumbent on
+ * the same benchmark (ties keep the incumbent). An incumbent scored on a
+ * different benchmark id (e.g. an older CORE_VERSION) is always replaced.
+ */
+export function considerForHallOfFame(hall: HallOfFame, genome: Genome, bench: Benchmark = BENCHMARK): HallOfFameUpdate {
   const checked = validateGenome(genome)
   if (!checked.ok) return { hall, crowned: false, reason: 'invalid-genome' }
-  if (bench.benchmarkId !== benchmarkId) return { hall, crowned: false, reason: 'wrong-benchmark' }
-  if (bench.classKey !== checked.genome.classKey) return { hall, crowned: false, reason: 'class-mismatch' }
-  if (bench.genomeHash !== genomeHash(checked.genome)) return { hall, crowned: false, reason: 'hash-mismatch' }
+  const result = benchmarkGenome(checked.genome, bench)
   const incumbent = hall[checked.genome.classKey]
-  if (incumbent && incumbent.benchmarkId === benchmarkId && incumbent.score >= bench.score) {
-    return { hall, crowned: false, reason: 'not-better' }
+  if (incumbent && incumbent.benchmarkId === result.benchmarkId && incumbent.score >= result.score) {
+    return { hall, crowned: false, result, reason: 'not-better' }
   }
   const entry: HallOfFameEntry = {
     classKey: checked.genome.classKey,
     genome: checked.genome,
-    genomeHash: bench.genomeHash,
-    benchmarkId,
-    score: bench.score,
-    wins: bench.wins,
+    genomeHash: result.genomeHash,
+    benchmarkId: result.benchmarkId,
+    score: result.score,
+    wins: result.wins,
   }
-  return { hall: { ...hall, [entry.classKey]: entry }, crowned: true }
+  return { hall: { ...hall, [entry.classKey]: entry }, crowned: true, result }
 }

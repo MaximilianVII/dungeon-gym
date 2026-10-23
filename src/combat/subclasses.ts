@@ -1,3 +1,4 @@
+import { deepFreeze } from '../freeze'
 // ---------------------------------------------------------------------------
 // Subclass catalogue — exactly the twelve subclasses published in the SRD 5.1
 // (one per class; CC-BY-4.0, see LICENSE-SRD.md). Feature text is paraphrased.
@@ -36,7 +37,7 @@ export interface Subclass {
   features: SubclassFeature[]
 }
 
-export const SUBCLASS_CATALOGUE: Subclass[] = [
+export const SUBCLASS_CATALOGUE: Subclass[] = deepFreeze([
   {
     classKey: 'barbarian', key: 'berserker', name: 'Path of the Berserker', chosenAtLevel: 3,
     features: [
@@ -153,7 +154,7 @@ export const SUBCLASS_CATALOGUE: Subclass[] = [
       { level: 14, key: 'overchannel', name: 'Overchannel', description: 'Maximize the damage of a low-level spell.' },
     ],
   },
-]
+])
 
 const BY_CLASS: Record<string, Subclass[]> = {}
 const BY_KEY: Record<string, Subclass> = {}

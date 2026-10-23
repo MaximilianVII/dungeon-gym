@@ -13,9 +13,9 @@ import { isOutOfFight, removeCondition, type Battler, type CombatAttack } from '
 import { generateLevelForRun, RUN_LENGTH } from '../dungeon/generate'
 import type { Level } from '../dungeon/levels'
 import { applyXp, monsterXp } from '../dungeon/leveling'
-import { artifactScore, drawRewards } from '../items/artifacts'
+import { artifactScore, drawRewards, effectScore, getArtifact, type ArtifactEffect } from '../items/artifacts'
 import { GEAR, usableGear, type GearItem } from '../items/gear'
-import { buildCharacter, starterSpec, type CharacterSpec, type ClassKey } from '../character/build'
+import { buildCharacter, starterSpec, validateCharacterSpec, type CharacterSpec, type ClassKey } from '../character/build'
 import { casterSlots, profBonus } from '../character/progression'
 import { deriveSeed, rngOf, seedRng, type RngState } from '../rng'
 import { genomeHash, validateGenome, type Genes, type Genome } from './genome'
@@ -48,6 +48,8 @@ const TRAP_DAMAGE = { count: 2, sides: 4, bonus: 0 }
 const SHRINE_FRAC = 0.4
 /** Step budget per dungeon level (the cap is depth × this); hitting it is a loss. */
 export const STEPS_PER_LEVEL = 8000
+/** Deepest allowed run. */
+export const MAX_DEPTH = 50
 /** A fight dragging past this many rounds is resolved by who's still standing. */
 const COMBAT_ROUND_CAP = 60
 /** Exploration: how far the party sees while sweeping a level. */
@@ -61,7 +63,8 @@ const BOT_WAND: CombatAttack = { name: 'Wand', toHit: 6, damage: { count: 2, sid
 export type RunPhase = 'explore' | 'combat' | 'done'
 /** won = cleared the last level · wiped = party dead · step-cap = budget spent · stuck = no path. */
 export type EndReason = 'won' | 'wiped' | 'step-cap' | 'stuck'
-export type DeathCause = 'combat' | 'trap'
+/** stalled = the run ended by step cap / no path while the member was still up. */
+export type DeathCause = 'combat' | 'trap' | 'stalled'
 
 export interface PartyMemberInit {
   genome: Genome
@@ -83,15 +86,8 @@ interface Spawn {
   pos: Vec2
 }
 
-/** Flat bonuses from artifacts and trinkets. */
-interface StatBonus {
-  maxHp: number
-  ac: number
-  toHit: number
-  damageBonus: number
-  /** Feet. */
-  speed: number
-}
+/** Equipment slots for found gear (a ring fits either ring slot). */
+export type GearSlot = 'mainHand' | 'offHand' | 'armor' | 'helmet' | 'legs' | 'boots' | 'ring1' | 'ring2' | 'amulet'
 
 export interface MemberState {
   memberId: number
@@ -102,14 +98,12 @@ export interface MemberState {
   /** The character; its classLevels grow with level-ups. */
   spec: CharacterSpec
   startLevel: number
-  bonus: StatBonus
-  /** AC of the best found armour (counted over the base sheet). */
-  armorBonus: number
-  /** Key of an equipped found weapon (replaces the sheet weapons), or null. */
-  weapon: string | null
+  /** Found gear by slot (keys of items/gear). One item per slot — no stacking. */
+  equipped: Partial<Record<GearSlot, string>>
   battler: Battler
   flags: FightFlags
   usage: UsageTally
+  /** Artifact keys picked so far (their bonuses stack — each is unique). */
   owned: string[]
   xp: number
   depthReached: number
@@ -238,27 +232,56 @@ function gearByKey(key: string): GearItem | undefined {
  * conditions, death saves, potions, position, per-fight flags); spell slots
  * carry over unless `refillSlots` (a level-up refills them).
  */
+type Totals = Required<ArtifactEffect>
+
+/** Flat bonuses from the member's artifacts and worn trinkets (not weapon/armour). */
+function flatBonus(m: MemberState): Totals {
+  const acc: Totals = { maxHp: 0, ac: 0, toHit: 0, damageBonus: 0, speed: 0 }
+  const add = (e: ArtifactEffect | undefined): void => {
+    if (!e) return
+    acc.maxHp += e.maxHp ?? 0
+    acc.ac += e.ac ?? 0
+    acc.toHit += e.toHit ?? 0
+    acc.damageBonus += e.damageBonus ?? 0
+    acc.speed += e.speed ?? 0
+  }
+  for (const k of m.owned) add(getArtifact(k)?.effect)
+  for (const [slot, key] of Object.entries(m.equipped)) {
+    if (!key || slot === 'mainHand' || slot === 'armor') continue
+    if (slot === 'offHand' && m.spec.shield) continue // already carries a shield
+    add(gearByKey(key)?.effect)
+  }
+  return acc
+}
+
 function deriveBattler(m: MemberState, prev: Battler | null, refillSlots: boolean): Battler {
   const sheet = buildCharacter(m.spec)
   const fresh = buildPlayerBattler({ ...sheet, id: `p${m.memberId}`, potions: STARTING_POTIONS }, prev?.pos ?? { x: 0, y: 0 })
   const charLevel = charLevelOf(m.spec.classLevels)
+  const bonus = flatBonus(m)
   let weapons = fresh.attacks.filter(isWeapon)
-  const found = m.weapon ? gearByKey(m.weapon) : undefined
+  const found = m.equipped.mainHand ? gearByKey(m.equipped.mainHand) : undefined
   if (found?.attack) {
     const a = cloneAttack(found.attack)
     a.toHit += profBonus(charLevel) - GEAR_BASE_PROF
     weapons = [a]
   }
   for (const a of weapons) {
-    a.toHit += m.bonus.toHit
-    a.damage.bonus += m.bonus.damageBonus
+    a.toHit += bonus.toHit
+    a.damage.bonus += bonus.damageBonus
   }
+  // Found armour REPLACES the sheet's armour: its AC (a bonus over 10 + DEX)
+  // only counts where it beats what the sheet already gets from armour or
+  // Unarmored Defense.
+  const armor = m.equipped.armor ? gearByKey(m.equipped.armor) : undefined
+  const sheetArmor = sheet.ac - 10 - sheet.dexModifier - (m.spec.shield ? 2 : 0)
+  const armorGain = Math.max(0, (armor?.effect?.ac ?? 0) - sheetArmor)
   const b: Battler = {
     ...fresh,
     attacks: [...weapons, ...fresh.attacks.filter((a) => !isWeapon(a))],
-    maxHp: fresh.maxHp + m.bonus.maxHp,
-    ac: fresh.ac + m.armorBonus + m.bonus.ac,
-    speedTiles: Math.max(1, Math.floor((sheet.speed + m.bonus.speed) / 5)),
+    maxHp: fresh.maxHp + bonus.maxHp + (armor?.effect?.maxHp ?? 0),
+    ac: fresh.ac + armorGain + bonus.ac,
+    speedTiles: Math.max(1, Math.floor((sheet.speed + bonus.speed) / 5)),
   }
   b.hp = b.maxHp
   if (!prev) return b
@@ -278,12 +301,18 @@ function deriveBattler(m: MemberState, prev: Battler | null, refillSlots: boolea
 /** Start a run. Genomes are validated strictly (throws on a malformed one). */
 export function createRun(config: RunConfig): RunState {
   if (config.party.length < 1 || config.party.length > 5) throw new Error('createRun: party size must be 1–5')
+  if (!Number.isFinite(config.seed)) throw new Error('createRun: seed must be a finite number')
+  const depth = config.depth ?? RUN_LENGTH
+  if (!Number.isInteger(depth) || depth < 1 || depth > MAX_DEPTH) throw new Error(`createRun: depth must be an integer 1–${MAX_DEPTH}`)
   const seed = config.seed >>> 0
-  const depth = Math.max(1, Math.round(config.depth ?? RUN_LENGTH))
   const members: MemberState[] = config.party.map((p, i) => {
     const checked = validateGenome(p.genome)
     if (!checked.ok) throw new Error(`createRun: invalid genome for member ${i}: ${checked.errors.join('; ')}`)
     const genome = checked.genome
+    if (p.spec) {
+      const specErrors = validateCharacterSpec(p.spec)
+      if (specErrors.length > 0) throw new Error(`createRun: invalid character for member ${i}: ${specErrors.join('; ')}`)
+    }
     const spec = p.spec ? JSON.parse(JSON.stringify(p.spec)) as CharacterSpec : starterSpec(genome.classKey)
     if (spec.classKey !== genome.classKey) throw new Error(`createRun: member ${i} genome is for ${genome.classKey} but the character is a ${spec.classKey}`)
     const m: MemberState = {
@@ -294,9 +323,7 @@ export function createRun(config: RunConfig): RunState {
       genes: genome.genes,
       spec,
       startLevel: charLevelOf(spec.classLevels),
-      bonus: { maxHp: 0, ac: 0, toHit: 0, damageBonus: 0, speed: 0 },
-      armorBonus: 0,
-      weapon: null,
+      equipped: {},
       battler: null as unknown as Battler,
       flags: { surgeUsed: false, secondWindUsed: false },
       usage: {},
@@ -403,20 +430,21 @@ function bfsNextStep(map: GameMap, from: Vec2, goal: Vec2): Vec2 | null {
   return { x: cur % W, y: (cur / W) | 0 }
 }
 
-/** Walkable tiles fanning out from a centre (BFS), to spread the party for a fight. */
-function spreadPositions(map: GameMap, center: Vec2, n: number): Vec2[] {
+/** Free tiles fanning out from the party's tile (BFS through walkable floor
+ *  only, never through walls or onto a foe), to spread the party for a fight. */
+function spreadPositions(map: GameMap, center: Vec2, n: number, blocked: Set<string>): Vec2[] {
   const out: Vec2[] = []
   const seen = new Set<string>([`${center.x},${center.y}`])
   const q: Vec2[] = [center]
   let head = 0
   while (head < q.length && out.length < n) {
     const p = q[head++]
-    if (isWalkable(map, p.x, p.y)) out.push(p)
+    out.push(p)
     for (const [dx, dy] of DIRS) {
       const nx = p.x + dx
       const ny = p.y + dy
       const k = `${nx},${ny}`
-      if (seen.has(k)) continue
+      if (seen.has(k) || blocked.has(k) || !isWalkable(map, nx, ny)) continue
       seen.add(k)
       q.push({ x: nx, y: ny })
     }
@@ -521,7 +549,7 @@ function finishRun(s: RunState, won: boolean, reason: EndReason): void {
     m.alive = false
     if (m.deathLevel === undefined) {
       m.deathLevel = s.levelIndex + 1
-      m.deathCause = 'combat'
+      m.deathCause = reason === 'wiped' ? 'combat' : 'stalled'
     }
   }
 }
@@ -536,13 +564,15 @@ function restParty(s: RunState, long: boolean): void {
       b.spellSlots = [...buildCharacter(m.spec).spellSlots]
       continue
     }
-    // Short rest: top up to ~3/4 HP (Hit Dice); a warlock regains Pact Magic.
+    // Short rest: top up to ~3/4 HP (Hit Dice); a warlock regains its Pact
+    // Magic slots (added back, capped at the build's full table).
     b.hp = Math.max(b.hp, Math.floor(b.maxHp * 0.75))
     const warlockLv = m.spec.classLevels.warlock ?? 0
     const pact = warlockLv > 0 ? casterSlots('warlock', warlockLv) : null
     if (pact) {
+      const full = buildCharacter(m.spec).spellSlots
       const slots = [...(b.spellSlots ?? [])]
-      for (let i = 0; i < pact.length; i++) slots[i] = Math.max(slots[i] ?? 0, pact[i])
+      for (let i = 0; i < pact.length; i++) slots[i] = Math.min(full[i] ?? 0, (slots[i] ?? 0) + pact[i])
       b.spellSlots = slots
     }
   }
@@ -552,30 +582,32 @@ function avgDamage(a: CombatAttack): number {
   return (a.damage.count * (a.damage.sides + 1)) / 2 + a.damage.bonus
 }
 
-/** Equip a found gear item if it's an upgrade. */
-function tryEquip(m: MemberState, item: GearItem): void {
+function gearEffectScore(key: string | undefined): number {
+  const item = key ? gearByKey(key) : undefined
+  return item?.effect ? effectScore(item.effect) : -Infinity
+}
+
+/** The slot a found item would go into (a ring takes a free or the weaker ring slot). */
+function slotFor(m: MemberState, item: GearItem): GearSlot {
+  if (item.kind !== 'ring') return item.kind
+  if (!m.equipped.ring1) return 'ring1'
+  if (!m.equipped.ring2) return 'ring2'
+  return gearEffectScore(m.equipped.ring1) <= gearEffectScore(m.equipped.ring2) ? 'ring1' : 'ring2'
+}
+
+/** Equip a found gear item if it beats what is in its slot (one item per slot). */
+export function equipFoundGear(m: MemberState, item: GearItem): void {
+  const slot = slotFor(m, item)
+  if (m.equipped[slot] === item.key) return
   if (item.attack) {
     const cur = m.battler.attacks.find(isWeapon)
-    if (!cur || avgDamage(item.attack) + m.bonus.damageBonus > avgDamage(cur)) {
-      m.weapon = item.key
-      m.battler = deriveBattler(m, m.battler, false)
-    }
+    if (cur && avgDamage(item.attack) + flatBonus(m).damageBonus <= avgDamage(cur)) return
+  } else if (item.kind === 'armor') {
+    if ((item.effect?.ac ?? 0) <= (gearByKey(m.equipped.armor ?? '')?.effect?.ac ?? 0)) return
+  } else if (!item.effect || effectScore(item.effect) <= gearEffectScore(m.equipped[slot])) {
     return
   }
-  const e = item.effect
-  if (!e) return
-  if (item.kind === 'armor') {
-    const ac = e.ac ?? 0
-    if (ac <= m.armorBonus) return
-    m.armorBonus = ac
-    m.bonus.maxHp += e.maxHp ?? 0
-  } else {
-    m.bonus.ac += e.ac ?? 0
-    m.bonus.maxHp += e.maxHp ?? 0
-    m.bonus.speed += e.speed ?? 0
-    m.bonus.toHit += e.toHit ?? 0
-    m.bonus.damageBonus += e.damageBonus ?? 0
-  }
+  m.equipped = { ...m.equipped, [slot]: item.key }
   m.battler = deriveBattler(m, m.battler, false)
 }
 
@@ -592,19 +624,13 @@ function grantReward(s: RunState, rng: Rng): void {
   for (const m of aliveMembers(s)) {
     if (rollDie(rng, 100) <= 18) {
       const pool = usableGear(m.classKey)
-      if (pool.length > 0) tryEquip(m, pool[rollDie(rng, pool.length) - 1])
+      if (pool.length > 0) equipFoundGear(m, pool[rollDie(rng, pool.length) - 1])
     }
     const choices = drawRewards(rng, s.levelIndex, m.owned)
     if (choices.length === 0) continue
     let best = choices[0]
     for (const a of choices) if (artifactScore(a) > artifactScore(best)) best = a
     m.owned.push(best.key)
-    const e = best.effect
-    m.bonus.maxHp += e.maxHp ?? 0
-    m.bonus.ac += e.ac ?? 0
-    m.bonus.speed += e.speed ?? 0
-    m.bonus.toHit += e.toHit ?? 0
-    m.bonus.damageBonus += e.damageBonus ?? 0
     m.battler = deriveBattler(m, m.battler, false)
   }
 }
@@ -645,7 +671,7 @@ function startCombat(s: RunState, spotter: Spawn, rng: Rng): void {
     (e) => e.id === spotter.id || (tileDistance(s.pos, e.pos) <= ENGAGE_RADIUS && lineOfSight(map, e.pos, s.pos)),
   )
   const alive = aliveMembers(s)
-  const spots = spreadPositions(map, s.pos, alive.length)
+  const spots = spreadPositions(map, s.pos, alive.length, new Set(engaged.map((e) => `${e.pos.x},${e.pos.y}`)))
   alive.forEach((m, i) => {
     const b = m.battler
     b.pos = { ...spots[i] }
@@ -735,11 +761,14 @@ function finishCombat(s: RunState, won: boolean): void {
     finishRun(s, false, 'wiped')
     return
   }
+  // XP only for foes actually killed (a fight stopped by the round cap leaves
+  // survivors, who simply wander off).
   let gain = 0
   for (const id of c.engaged) {
     const spawn = s.remaining.find((e) => e.id === id)
     const mon = spawn ? getMonster(spawn.key) : undefined
-    if (mon) gain += monsterXp(mon.maxHp, mon.role)
+    const killed = spawn ? c.enemies.some((b) => b.id === `${spawn.key}-${spawn.id}` && b.hp <= 0) : false
+    if (mon && killed) gain += monsterXp(mon.maxHp, mon.role)
   }
   for (const m of aliveMembers(s)) {
     // Downed-but-not-dead survivors stabilise at 1 HP.
@@ -774,7 +803,20 @@ function enemiesUp(battlers: Battler[]): number {
   return battlers.filter((b) => b.team === 'enemy' && b.hp > 0).length
 }
 
+/** Members whose battler died outright (e.g. massive damage) leave the party. */
+function syncDeaths(s: RunState, c: CombatState): void {
+  for (const id of c.memberIds) {
+    const m = memberById(s, id)
+    if (m.alive && m.battler.deathSaves?.dead) {
+      m.alive = false
+      m.deathLevel = s.levelIndex + 1
+      m.deathCause = 'combat'
+    }
+  }
+}
+
 function combatStep(s: RunState, c: CombatState, rng: Rng, decide: Rng): void {
+  syncDeaths(s, c)
   const battlers = combatBattlers(s, c)
   const o = outcome(battlers)
   if (o !== 'ongoing') {

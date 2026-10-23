@@ -97,6 +97,51 @@ export interface CharacterSpec {
   defenseStyle?: boolean
 }
 
+export const MAX_CHARACTER_LEVEL = 20
+const ABILITY_KEYS: readonly (keyof AbilityScores)[] = ['str', 'dex', 'con', 'int', 'wis', 'cha']
+const SPEC_KEYS: readonly string[] = ['name', 'classKey', 'classLevels', 'abilityScores', 'weapons', 'armor', 'shield', 'defenseStyle']
+
+function isIntIn(v: unknown, lo: number, hi: number): boolean {
+  return typeof v === 'number' && Number.isInteger(v) && v >= lo && v <= hi
+}
+
+/** Strict check of a character spec from outside (empty array = valid). */
+export function validateCharacterSpec(spec: unknown): string[] {
+  if (typeof spec !== 'object' || spec === null || Array.isArray(spec)) return ['spec: expected an object']
+  const s = spec as Record<string, unknown>
+  const errors: string[] = []
+  for (const k of Object.keys(s)) if (!SPEC_KEYS.includes(k)) errors.push(`spec: unknown field ${JSON.stringify(k.slice(0, 40))}`)
+  if (typeof s.name !== 'string' || s.name.length < 1 || s.name.length > 64) errors.push('spec.name: expected 1–64 characters')
+  if (typeof s.classKey !== 'string' || !isClassKey(s.classKey)) errors.push('spec.classKey: unknown class')
+  const levels = s.classLevels
+  if (typeof levels !== 'object' || levels === null || Array.isArray(levels)) errors.push('spec.classLevels: expected an object')
+  else {
+    let total = 0
+    for (const [k, v] of Object.entries(levels)) {
+      if (!isClassKey(k)) errors.push(`spec.classLevels: unknown class ${JSON.stringify(k.slice(0, 40))}`)
+      if (!isIntIn(v, 1, MAX_CHARACTER_LEVEL)) errors.push(`spec.classLevels.${k.slice(0, 40)}: expected an integer 1–${MAX_CHARACTER_LEVEL}`)
+      else total += v as number
+    }
+    if (total < 1 || total > MAX_CHARACTER_LEVEL) errors.push(`spec.classLevels: total level must be 1–${MAX_CHARACTER_LEVEL}`)
+    if (typeof s.classKey === 'string' && !((levels as Record<string, unknown>)[s.classKey])) errors.push('spec.classLevels: must include the starting class')
+  }
+  const scores = s.abilityScores
+  if (typeof scores !== 'object' || scores === null || Array.isArray(scores)) errors.push('spec.abilityScores: expected an object')
+  else {
+    const keys = Object.keys(scores)
+    if (keys.length !== ABILITY_KEYS.length || !ABILITY_KEYS.every((k) => isIntIn((scores as Record<string, unknown>)[k], 1, 30))) {
+      errors.push('spec.abilityScores: expected str/dex/con/int/wis/cha integers 1–30')
+    }
+  }
+  if (!Array.isArray(s.weapons) || s.weapons.length < 1 || s.weapons.length > 4 || !s.weapons.every((w) => typeof w === 'string' && Object.prototype.hasOwnProperty.call(WEAPONS, w))) {
+    errors.push('spec.weapons: expected 1–4 known weapon keys')
+  }
+  if (s.armor !== undefined && (typeof s.armor !== 'string' || !Object.prototype.hasOwnProperty.call(ARMOR, s.armor))) errors.push('spec.armor: unknown armor')
+  if (s.shield !== undefined && typeof s.shield !== 'boolean') errors.push('spec.shield: expected a boolean')
+  if (s.defenseStyle !== undefined && typeof s.defenseStyle !== 'boolean') errors.push('spec.defenseStyle: expected a boolean')
+  return errors
+}
+
 export function abilityMod(score: number): number {
   return Math.floor((score - 10) / 2)
 }

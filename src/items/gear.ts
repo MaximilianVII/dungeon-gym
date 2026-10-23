@@ -1,5 +1,6 @@
 import type { CombatAttack } from '../combat/types'
 import type { ArtifactEffect, Rarity } from './artifacts'
+import { deepFreeze } from '../freeze'
 
 // ---------------------------------------------------------------------------
 // Gear a bot can find and equip mid-run: weapons (replace the main-hand
@@ -29,7 +30,7 @@ function weapon(name: string, toHit: number, count: number, sides: number, bonus
   return { name, toHit, damage: { count, sides, bonus }, damageType: dt, range, source: 'weapon' }
 }
 
-export const GEAR: GearItem[] = [
+export const GEAR: GearItem[] = deepFreeze([
   { key: 'fine-sword', name: 'Fine Sword', rarity: 'uncommon', kind: 'mainHand', attack: weapon('Fine Sword', 6, 1, 8, 3, 'slashing') },
   { key: 'great-axe', name: 'Great Axe', rarity: 'rare', kind: 'mainHand', attack: weapon('Great Axe', 5, 1, 12, 2, 'slashing') },
   { key: 'duelist-rapier', name: 'Duelist’s Rapier', rarity: 'uncommon', kind: 'mainHand', attack: weapon('Duelist’s Rapier', 7, 1, 8, 2, 'piercing') },
@@ -46,7 +47,7 @@ export const GEAR: GearItem[] = [
   { key: 'vigor-band', name: 'Vigor Band', rarity: 'uncommon', kind: 'ring', effect: { maxHp: 6 } },
   { key: 'ring-precision', name: 'Ring of Precision', rarity: 'very-rare', kind: 'ring', effect: { toHit: 2, damageBonus: 1 } },
   { key: 'amulet-health', name: 'Amulet of Vigor', rarity: 'rare', kind: 'amulet', effect: { maxHp: 12 } },
-]
+])
 
 const ARMOR_LEVEL = { light: 1, medium: 2, heavy: 3 } as const
 

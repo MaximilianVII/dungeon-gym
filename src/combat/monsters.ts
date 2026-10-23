@@ -1,4 +1,5 @@
 import type { CombatAttack } from './types'
+import { deepFreeze } from '../freeze'
 
 // ---------------------------------------------------------------------------
 // Monster stat blocks. The ordinary foes are simplified stat blocks of SRD 5.1
@@ -398,7 +399,7 @@ export const BONE_LICH: MonsterBlock = {
   telegraph: { cooldown: 3, attack: { name: 'Necrotic Nova', toHit: 7, damage: { count: 5, sides: 6, bonus: 0 }, damageType: 'necrotic', range: 12, area: 3 } },
 }
 
-export const MONSTERS: Record<string, MonsterBlock> = {
+export const MONSTERS: Record<string, MonsterBlock> = deepFreeze({
   goblin: GOBLIN,
   skeleton: SKELETON,
   kobold: KOBOLD,
@@ -420,7 +421,7 @@ export const MONSTERS: Record<string, MonsterBlock> = {
   'orc-warlord': ORC_WARLORD,
   'spider-broodmother': SPIDER_BROODMOTHER,
   'bone-lich': BONE_LICH,
-}
+})
 
 export function getMonster(key: string): MonsterBlock | undefined {
   return MONSTERS[key]
@@ -428,7 +429,7 @@ export function getMonster(key: string): MonsterBlock | undefined {
 
 // Per-biome boss key. Vault keeps the Orc Warlord so the standard 5-level run's
 // finale (and its test) is unchanged; the other biomes field a themed boss, so a
-// run that ends on a different biome (e.g. a shorter/longer Arena run) meets a
+// run that ends on a different biome (a run of another depth) meets a
 // different boss. Fallback = the Orc Warlord.
 const BIOME_BOSS: Record<string, string> = {
   crypt: 'orc-warlord',

@@ -1,5 +1,6 @@
 import { CLASS_KEYS, isClassKey, type ClassKey } from '../character/build'
 import { hashString, type Rng } from '../rng'
+import { deepFreeze } from '../freeze'
 
 // ---------------------------------------------------------------------------
 // A bot GENOME — the uploadable artifact. One genome = one class's complete
@@ -84,7 +85,7 @@ interface NumericSpec {
   step: number
 }
 
-export const NUMERIC_GENES: Record<NumericGene, NumericSpec> = {
+export const NUMERIC_GENES: Record<NumericGene, NumericSpec> = deepFreeze({
   healAtHpFrac: { min: 0, max: 0.9, step: 0.12 },
   secondWindAtHpFrac: { min: 0, max: 0.9, step: 0.12 },
   retreatAtHpFrac: { min: 0, max: 0.6, step: 0.08 },
@@ -97,7 +98,7 @@ export const NUMERIC_GENES: Record<NumericGene, NumericSpec> = {
   protectAllies: { min: 0, max: 1, step: 0.12 },
   aggression: { min: 0, max: 1, step: 0.12 },
   exploreCoverage: { min: 0.3, max: 0.95, step: 0.08 },
-}
+})
 
 export const BOOLEAN_GENES: readonly BooleanGene[] = ['openWithRage', 'inspireBeforeAttack', 'actionSurgeEarly', 'focusWeakest', 'potionFirst']
 
@@ -109,7 +110,7 @@ export const GENE_ORDER: readonly GeneKey[] = [
   'exploreCoverage', 'levelUpOrder',
 ]
 
-export const DEFAULT_GENES: Genes = {
+export const DEFAULT_GENES: Genes = deepFreeze({
   healAtHpFrac: 0.35,
   secondWindAtHpFrac: 0.5,
   retreatAtHpFrac: 0.15,
@@ -128,7 +129,7 @@ export const DEFAULT_GENES: Genes = {
   aggression: 0.5,
   exploreCoverage: 0.65,
   levelUpOrder: [],
-}
+})
 
 // Per-class starting knowledge (ported from the legacy strategies/*.json).
 const BASELINES: Record<ClassKey, Partial<Genes>> = {
@@ -189,7 +190,8 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 }
 
 function checkKeys(obj: Record<string, unknown>, expected: readonly string[], where: string, errors: string[]): void {
-  for (const k of Object.keys(obj)) if (!expected.includes(k)) errors.push(`${where}: unknown field "${k}"`)
+  // Echo attacker-supplied names only JSON-escaped and truncated.
+  for (const k of Object.keys(obj)) if (!expected.includes(k)) errors.push(`${where}: unknown field ${JSON.stringify(k.slice(0, 40))}`)
   for (const k of expected) if (!Object.prototype.hasOwnProperty.call(obj, k)) errors.push(`${where}: missing field "${k}"`)
 }
 
@@ -207,31 +209,40 @@ export function validateGenome(value: unknown): GenomeParseResult {
     return { ok: false, errors }
   }
   checkKeys(genes, GENE_ORDER, 'genome.genes', errors)
+  // Read every field exactly once and validate/return those copies, so an
+  // accessor or a later mutation of the input cannot change what was checked.
+  const read: Record<string, unknown> = {}
+  for (const k of GENE_ORDER) if (Object.prototype.hasOwnProperty.call(genes, k)) read[k] = genes[k]
   for (const [k, spec] of Object.entries(NUMERIC_GENES) as [NumericGene, NumericSpec][]) {
-    if (!(k in genes)) continue
-    const v = genes[k]
+    if (!(k in read)) continue
+    const v = read[k]
     if (typeof v !== 'number' || !Number.isFinite(v)) errors.push(`genes.${k}: expected a finite number`)
     else if (v < spec.min || v > spec.max) errors.push(`genes.${k}: ${v} is outside [${spec.min}, ${spec.max}]`)
     else if (spec.integer && !Number.isInteger(v)) errors.push(`genes.${k}: expected an integer`)
   }
   for (const k of BOOLEAN_GENES) {
-    if (k in genes && typeof genes[k] !== 'boolean') errors.push(`genes.${k}: expected a boolean`)
+    if (k in read && typeof read[k] !== 'boolean') errors.push(`genes.${k}: expected a boolean`)
   }
-  if ('levelUpOrder' in genes) {
-    const order = genes.levelUpOrder
-    if (!Array.isArray(order)) errors.push('genes.levelUpOrder: expected an array')
+  let order: unknown[] = []
+  if ('levelUpOrder' in read) {
+    const raw = read.levelUpOrder
+    if (!Array.isArray(raw)) errors.push('genes.levelUpOrder: expected an array')
+    else if (raw.length > MAX_LEVEL_UP_ORDER) errors.push(`genes.levelUpOrder: at most ${MAX_LEVEL_UP_ORDER} entries`)
     else {
-      if (order.length > MAX_LEVEL_UP_ORDER) errors.push(`genes.levelUpOrder: at most ${MAX_LEVEL_UP_ORDER} entries`)
+      for (let i = 0; i < raw.length; i++) {
+        if (!(i in raw)) errors.push(`genes.levelUpOrder[${i}]: missing entry`)
+        order.push(raw[i])
+      }
       order.forEach((c, i) => {
         if (typeof c !== 'string' || !isClassKey(c)) errors.push(`genes.levelUpOrder[${i}]: unknown class`)
       })
     }
   }
   if (errors.length > 0) return { ok: false, errors }
-  const g = genes as unknown as Genes
+  const out = { ...read, levelUpOrder: order } as unknown as Genes
   return {
     ok: true,
-    genome: { schema: GENOME_SCHEMA, version: GENOME_VERSION, classKey: value.classKey as ClassKey, genes: copyGenes(g) },
+    genome: { schema: GENOME_SCHEMA, version: GENOME_VERSION, classKey: value.classKey as ClassKey, genes: out },
   }
 }
 

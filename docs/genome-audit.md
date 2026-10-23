@@ -103,9 +103,10 @@ paired with in that run (A-6).
 - Impact: the Hall of Fame genome is essentially a random recent genome of a
   class that was doing well on average; its recorded fitness is not its own.
   Unusable as an "official best" for upload or leaderboards.
-- Fix in core: `updateHallOfFame` only accepts a genome together with **its own
-  benchmark score** (mean over the fixed benchmark seed set), and keeps the
-  best per class. **Fixed in core.**
+- Fix in core: `considerForHallOfFame` **recomputes the genome's own
+  benchmark score** (mean over the fixed, frozen benchmark seed set) — it
+  never accepts a score from the caller, so it cannot be forged — and keeps
+  the best per class. **Fixed in core.**
 
 ### A-5 · High · Reward changes mid-training mix incompatible fitnesses
 - Evidence: the reward is read at harvest time from the live store
@@ -283,6 +284,15 @@ paired with in that run (A-6).
   Fiend's and the Lore bard's features fire once per *run*.
 - Fix in core: both are reset at the start of every fight. **Fixed in core.**
 
+### A-23 · Medium · Found gear stacked without limit (found during the core review)
+- Evidence: legacy `tryEquip` (botRun.ts:499-538) adds every non-armour find
+  on top of the last (two Round Shields = +4 AC, on a fighter who already
+  carries a shield), and found armour adds its AC *on top of* the sheet's
+  armour (a Leather Jerkin gave a chain-mail fighter +2 AC).
+- Fix in core: one item per slot; found armour replaces the sheet's armour
+  (counts only where it beats it); a found shield is ignored when the
+  character already carries one. **Fixed in core** (`equipFoundGear`, tests).
+
 ## 3. Measurements
 
 Measured with the ported core (`src/`), same seeds for every variant (common
@@ -290,9 +300,9 @@ random numbers), 200 seeds per number unless noted.
 
 | Quantity | Value |
 |---|---|
-| Per-run fitness, fighter baseline, legacy default reward, depth 25 | mean 1484, **sd 3159** |
-| Per-run fitness, barbarian / wizard (same setup) | mean 344 / 34, sd 192 / 40 |
-| \|Δ mean fitness\| of one mutation vs. its parent (fighter, 30 mutants) | median 54, p90 319 |
+| Per-run fitness, fighter baseline, legacy default reward, depth 25 | mean 490, **sd 187** |
+| Per-run fitness, barbarian / wizard (same setup) | mean 336 / 34, sd 188 / 40 |
+| \|Δ mean fitness\| of one mutation vs. its parent (fighter, 30 mutants) | median 2.5, p90 20 |
 | Legacy promotion rule, candidate *identical* to current (simulated, 20 000 trials) | promoted **63 %** (current n = 6) … **70 %** (current n = 50) |
 | Run cost | 3–9 ms for 5 levels; ≤ 60 ms for 25 levels |
 | Official benchmark (32 seeds × 10 levels) | ≈ 0.2 s per genome |
@@ -300,19 +310,22 @@ random numbers), 200 seeds per number unless noted.
 
 Reading:
 - With unpaired samples of 6, the standard error of a mean difference is
-  ≈ 3159·√(2/6) ≈ 1 800 — about 30× the typical effect of a mutation. The
+  ≈ 187·√(2/6) ≈ 108 — about 40× the median effect of a mutation. The
   legacy (1+1)-ES (A-7) is therefore choosing between candidates essentially
   at random, and promotes a no-better candidate about two times in three.
-- The fitness spread is driven by the `damage` term (deep survivors farm
+- The fitness spread is dominated by the `damage` term (deep survivors farm
   depth-scaled monster HP), which confirms A-17: the benchmark must be
-  outcome-only.
+  outcome-only. (Before the gear fix below, stacked shields/armour pushed the
+  fighter's per-run sd to ≈ 3 000.)
 - Legacy runs stay far below the 60 000-step cap in normal play, so A-13 bites
   only in stalls — still a correctness bug (a stall must not score as a win),
   hence Medium rather than Critical.
-- Baseline balance (benchmark, depth 10): only fighters and paladins ever
-  clear all 10 levels; full casters and rogues die on levels 2–4. That is a
-  game-balance issue for phase 2, not a genome bug, but it means the
-  benchmark mostly ranks casters by depth reached.
+- Baseline balance (benchmark, depth 10): no baseline genome clears all 10
+  levels; fighters, barbarians and paladins go deepest, full casters and
+  rogues die on levels 2–4. That is a game-balance issue for phase 2, not a
+  genome bug, but it means the benchmark currently ranks mostly by depth
+  reached.
+
 
 ## 4. Is the genome fit as an upload artifact?
 

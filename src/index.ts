@@ -15,9 +15,9 @@ export {
 
 // Runs
 export {
-  RUN_STATE_SCHEMA, RUN_STATE_VERSION, STEPS_PER_LEVEL,
-  createRun, stepRun, runToEnd, playRun, isRunDone, runResult, runSnapshot, cloneRunState,
-  type RunConfig, type RunState, type RunResult, type MemberResult, type RunSnapshot, type PartyMemberInit, type EndReason, type RunPhase, type DeathCause,
+  RUN_STATE_SCHEMA, RUN_STATE_VERSION, STEPS_PER_LEVEL, MAX_DEPTH,
+  createRun, stepRun, runToEnd, playRun, isRunDone, runResult, runSnapshot, cloneRunState, equipFoundGear,
+  type RunConfig, type RunState, type RunResult, type MemberResult, type RunSnapshot, type PartyMemberInit, type EndReason, type RunPhase, type DeathCause, type GearSlot,
 } from './bot/run'
 export { botPlayerTurn, type FightFlags } from './bot/policy'
 export { DEFAULT_REWARD, BENCHMARK_REWARD, REWARD_PRESETS, clampReward, memberFitness, diversityBonus, type RewardConfig, type FitnessInput } from './bot/reward'
@@ -27,7 +27,7 @@ export { aggregate, totals, resultsCSV, type ClassStat, type Totals } from './bo
 // Training
 export { evaluateGenome, benchmarkGenome, scoreRun, mean, BENCHMARK, type Benchmark, type BenchmarkResult, type Evaluation, type EvaluateOptions } from './train/evaluate'
 export {
-  TRAINER_SCHEMA, TRAINER_VERSION, makeTrainerConfig, createTrainer, pendingTasks, evaluateTask, submitScores, isGenerationComplete,
+  TRAINER_SCHEMA, TRAINER_VERSION, MAX_ABS_SCORE, makeTrainerConfig, createTrainer, pendingTasks, evaluateTask, submitScores, isGenerationComplete,
   rankPopulation, advanceGeneration, lastBest, trainGenerations,
   type TrainerConfig, type TrainerState, type Individual, type EvalTask, type ScoreSubmission, type SubmitError, type SubmitOutcome, type GenerationSummary,
 } from './train/trainer'
@@ -35,7 +35,7 @@ export { considerForHallOfFame, type HallOfFame, type HallOfFameEntry, type Hall
 
 // Characters
 export {
-  CLASS_KEYS, STARTING_LEVEL, WEAPONS, ARMOR, isClassKey, buildCharacter, starterSpec, starterCharacter, spellsForBuild, abilityMod,
+  CLASS_KEYS, STARTING_LEVEL, MAX_CHARACTER_LEVEL, WEAPONS, ARMOR, isClassKey, validateCharacterSpec, buildCharacter, starterSpec, starterCharacter, spellsForBuild, abilityMod,
   type ClassKey, type CharacterSpec,
 } from './character/build'
 export type { PlayerSource, AbilityScores } from './combat/setup'

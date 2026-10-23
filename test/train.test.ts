@@ -152,25 +152,34 @@ describe('evaluation + benchmark', () => {
 describe('hall of fame', () => {
   const MINI: Benchmark = { id: BENCHMARK.id, coreVersion: CORE_VERSION, depth: 1, seeds: [1, 2], reward: BENCHMARK_REWARD }
 
-  it('crowns a genome only with its own matching benchmark result, best score wins', () => {
+  it('scores the genome itself (no caller-supplied score to forge); best score wins', () => {
     const a = baselineGenome('fighter')
-    const b = makeGenome('fighter', { ...a.genes, kite: 0.9 })
-    const ra = benchmarkGenome(a, MINI)
-    const rb = benchmarkGenome(b, MINI)
     let hall: HallOfFame = {}
-    const first = considerForHallOfFame(hall, a, ra)
+    const first = considerForHallOfFame(hall, a, MINI)
     expect(first.crowned).toBe(true)
     expect(hall).toEqual({}) // immutable
     hall = first.hall
-    expect(hall.fighter?.score).toBe(ra.score)
-    expect(considerForHallOfFame(hall, a, ra).reason).toBe('not-better')
-    expect(considerForHallOfFame(hall, b, ra).reason).toBe('hash-mismatch')
-    expect(considerForHallOfFame(hall, a, { ...ra, benchmarkId: 'other' }).reason).toBe('wrong-benchmark')
-    expect(considerForHallOfFame(hall, a, { ...ra, classKey: 'wizard' }).reason).toBe('class-mismatch')
-    expect(considerForHallOfFame(hall, { ...a, version: 3 } as unknown as typeof a, ra).reason).toBe('invalid-genome')
-    const better = considerForHallOfFame(hall, b, { ...rb, score: ra.score + 1 })
-    expect(better.crowned).toBe(true)
-    expect(better.hall.fighter?.genomeHash).toBe(genomeHash(b))
+    expect(hall.fighter?.score).toBe(benchmarkGenome(a, MINI).score)
+    expect(hall.fighter?.genomeHash).toBe(genomeHash(a))
+    expect(considerForHallOfFame(hall, a, MINI).reason).toBe('not-better')
+    expect(considerForHallOfFame(hall, { ...a, version: 3 } as unknown as typeof a, MINI).reason).toBe('invalid-genome')
+    // A genome that scores better replaces the incumbent; a worse one does not.
+    const rivals = [0.05, 0.3, 0.6, 0.95].map((kite) => makeGenome('fighter', { ...a.genes, kite, aggression: 1 - kite }))
+    for (const r of rivals) {
+      const res = considerForHallOfFame(hall, r, MINI)
+      expect(res.crowned).toBe((res.result?.score ?? -Infinity) > (hall.fighter?.score ?? -Infinity))
+      hall = res.hall
+    }
+    // An incumbent from another benchmark version is always replaced.
+    const stale: HallOfFame = { fighter: { ...hall.fighter!, benchmarkId: 'old', score: Number.MAX_VALUE } }
+    expect(considerForHallOfFame(stale, a, MINI).crowned).toBe(true)
+  })
+
+  it('the official benchmark tables are frozen', () => {
+    expect(Object.isFrozen(BENCHMARK)).toBe(true)
+    expect(Object.isFrozen(BENCHMARK.seeds)).toBe(true)
+    expect(() => (BENCHMARK.seeds as number[]).push(1)).toThrow()
+    expect(Object.isFrozen(DEFAULT_REWARD.abilityRewards)).toBe(true)
   })
 })
 

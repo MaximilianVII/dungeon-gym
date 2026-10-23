@@ -1,5 +1,6 @@
 import { roleOf, type Genes } from './genome'
 import type { UsageTally } from './usage'
+import { deepFreeze } from '../freeze'
 
 // ---------------------------------------------------------------------------
 // REWARD (fitness) — how a finished member-run is scored. A trainer fixes one
@@ -33,7 +34,7 @@ export interface RewardConfig {
 }
 
 /** The legacy defaults (local training). */
-export const DEFAULT_REWARD: RewardConfig = {
+export const DEFAULT_REWARD: RewardConfig = deepFreeze({
   depth: 12,
   win: 40,
   survive: 15,
@@ -43,10 +44,10 @@ export const DEFAULT_REWARD: RewardConfig = {
   healing: 0.4,
   diversity: 15,
   abilityRewards: {},
-}
+})
 
 /** Outcome-only reward used for official benchmark scores. */
-export const BENCHMARK_REWARD: RewardConfig = {
+export const BENCHMARK_REWARD: RewardConfig = deepFreeze({
   depth: 12,
   win: 40,
   survive: 15,
@@ -56,16 +57,16 @@ export const BENCHMARK_REWARD: RewardConfig = {
   healing: 0,
   diversity: 0,
   abilityRewards: {},
-}
+})
 
 /** One-click weight sets. */
-export const REWARD_PRESETS: Record<string, RewardConfig> = {
+export const REWARD_PRESETS: Record<string, RewardConfig> = deepFreeze({
   balanced: { ...DEFAULT_REWARD },
   damage: { ...DEFAULT_REWARD, damage: 1.4, win: 30, survive: 8, depth: 8 },
   survival: { ...DEFAULT_REWARD, survive: 30, die: 60, damage: 0.3, depth: 14 },
   depth: { ...DEFAULT_REWARD, depth: 26, win: 60, damage: 0.4, survive: 10 },
   benchmark: { ...BENCHMARK_REWARD },
-}
+})
 
 function num(v: number, lo: number, hi: number): number {
   return Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : 0
@@ -73,7 +74,9 @@ function num(v: number, lo: number, hi: number): number {
 
 /** Clamp every field to a sane range; drop zero/invalid ability rewards. */
 export function clampReward(c: Partial<RewardConfig>): RewardConfig {
-  const base = { ...DEFAULT_REWARD, ...c }
+  // An explicit `undefined` means "not set", same as a missing key.
+  const given = Object.fromEntries(Object.entries(c).filter(([, v]) => v !== undefined)) as Partial<RewardConfig>
+  const base = { ...DEFAULT_REWARD, ...given }
   const abilityRewards: Record<string, number> = {}
   for (const [k, v] of Object.entries(base.abilityRewards ?? {})) {
     if (Number.isFinite(v) && v !== 0) abilityRewards[k] = num(v, -50, 200)

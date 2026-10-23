@@ -54,7 +54,7 @@ console.log(lastBest(trainer))
 
 // Official score: 32 fixed seeds × 10 levels, outcome-only reward.
 const score = benchmarkGenome(genome)
-const { hall } = considerForHallOfFame({}, genome, score)
+const { hall } = considerForHallOfFame({}, genome)   // re-scores the genome itself
 ```
 
 For distributed training, use `pendingTasks` → `evaluateTask` (anywhere, e.g. a

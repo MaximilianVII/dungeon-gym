@@ -2,6 +2,7 @@ import { genomeHash, validateGenome, type Genome } from '../bot/genome'
 import { BENCHMARK_REWARD, DEFAULT_REWARD, diversityBonus, memberFitness, type RewardConfig } from '../bot/reward'
 import { playRun, type PartyMemberInit, type RunResult } from '../bot/run'
 import { CORE_VERSION } from '../version'
+import { deepFreeze } from '../freeze'
 
 // ---------------------------------------------------------------------------
 // Deterministic evaluation of a genome on a set of dungeon seeds, and the
@@ -59,7 +60,7 @@ export interface Benchmark {
 }
 
 /** The official solo benchmark: 32 fixed seeds × 10 levels, outcome-only reward. */
-export const BENCHMARK: Benchmark = {
+export const BENCHMARK: Benchmark = deepFreeze({
   id: `dungeon-gym/bench-v1@${CORE_VERSION}`,
   coreVersion: CORE_VERSION,
   depth: 10,
@@ -70,7 +71,7 @@ export const BENCHMARK: Benchmark = {
     3192556735, 3717279030, 2518926029, 4228554414, 1218025169, 2112934956, 903662956, 2593022835,
   ],
   reward: BENCHMARK_REWARD,
-}
+})
 
 export interface BenchmarkResult {
   benchmarkId: string
