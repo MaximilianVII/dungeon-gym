@@ -128,7 +128,8 @@ or a team, `speed` measures runs per second and `report` prints the balance tele
 | `src/game/`, `src/dungeon/` | grid, line of sight, procedural levels, XP |
 | `src/combat/` | dice, attack resolution, monsters, spells, control spells and concentration, spell slots, subclasses, multiclassing, monster and boss AI |
 | `src/character/` | SRD-table character builder and the 12 starting characters |
-| `src/bot/` | genome schema, bot combat policy and tactics, the run state machine, reward |
+| `src/bot/` | genome and team schemas, bot combat policy and tactics, the run API (`bot/run`), reward |
+| `src/run/` | the run state machine: state types, exploration, fights, party members |
 | `src/train/` | evaluation, benchmark, trainer, party trainer and party benchmark, hall of fame |
 | `docs/genome-audit.md` | audit of the legacy genome/learning logic and what changed |
 | `docs/balance.md` | per-class benchmark and telemetry across rules versions |
