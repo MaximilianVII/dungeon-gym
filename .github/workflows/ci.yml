@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # Superseded PR / branch runs are cancelled; every push to main keeps its run.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  test:
+    name: test (${{ matrix.os }}, node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: [20, 22]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      # Scripts are skipped here (no `prepare` build); the build is its own step.
+      - run: npm ci --ignore-scripts
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Tests with coverage (thresholds in vitest.config.ts)
+        run: npm run coverage
+      - name: Build
+        run: npm run build
+      - name: CLI smoke test (train → validate → bench)
+        run: npm run smoke
+      # Also proves the simulation is identical on every OS / Node version.
+      - name: Benchmark regression check
+        run: node scripts/bench-baseline.mjs check
+      - name: Upload coverage
+        if: matrix.os == 'ubuntu-latest' && matrix.node == 22
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: coverage/
+          retention-days: 14
+
+  package:
+    name: package (npm pack + consumer install)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      # `npm pack` runs `prepare` (the build), as a git install would.
+      - name: Pack, install into a scratch project, import, typecheck, run the bin
+        run: npm run pack:check -- --dir "$RUNNER_TEMP/pack"
+
+  workflows:
+    name: lint workflows (actionlint)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: docker://rhysd/actionlint:1.7.12
+        with:
+          args: -color
