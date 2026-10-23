@@ -31,7 +31,9 @@ import {
   benchmarkGenome, considerForHallOfFame,
 } from 'dungeon-gym-core'
 
-// A genome is the uploadable artifact (versioned, strictly validated).
+// A genome is the uploadable artifact (schema version 2, strictly validated;
+// version-1 payloads are accepted and migrated). Genes cover combat tactics,
+// role leanings, exploration, loot preferences and the level-up class order.
 const genome = baselineGenome('wizard')
 const text = serializeGenome(genome)            // canonical JSON
 const parsed = parseGenome(text)                // { ok, genome } | { ok: false, errors }

@@ -25,10 +25,10 @@ available at https://creativecommons.org/licenses/by/4.0/legalcode.
 
 The material has been **adapted and simplified** for a grid-based roguelite:
 feature and spell texts are paraphrased; many effects are simplified (e.g. area
-spells use a Dexterity-style save against the caster's attack bonus, some
-features refresh per fight rather than per rest, Bardic Inspiration is
-self-targeted); monster stat blocks are reduced to the fields the game uses
-and scale with dungeon depth.
+spells use a Dexterity-style save against the caster's attack bonus, rests
+happen only between dungeon levels, a Bardic Inspiration die is only spent on
+an attack roll that would miss); monster stat blocks are reduced to the fields
+the game uses and scale with dungeon depth.
 
 The Cult Adept, the bosses (Orc Warlord, Spider Broodmother, Bone Lich),
 artifacts, gear, elite affixes, the XP curve and the dungeon generator are

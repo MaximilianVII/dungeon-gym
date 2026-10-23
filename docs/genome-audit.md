@@ -164,10 +164,13 @@ paired with in that run (A-6).
   (:297). Mutation jiggles them by ±0.12 (strategy.ts:200-208), so most
   mutations are behavioural no-ops (neutral drift) and the optimiser has no
   gradient.
-- Fix in core: `focusCasters`, `slotReserve`, `regroup` are now
-  **probabilities per decision**, drawn from the run RNG (deterministic given
-  the seed), so the value is meaningful across its whole range; `kite` keeps
-  its threshold role but is documented as such. **Fixed in core** (genome v1).
+- Fix in core: `focusCasters`, `slotReserve`, `regroup` and — since genome
+  v2 — `kite` are **probabilities per turn**, drawn from a separate policy
+  RNG (deterministic given the seed), so each value is meaningful across its
+  whole range. `kite` is shifted by the role genes around their midpoint:
+  p = clamp(kite − 0.4·(aggression − 0.5) − 0.3·(protect − 0.5)). v1 genomes
+  migrate to kite 1 or 0 so their stance is preserved (exact with default role
+  genes). **Fixed in core** (genome v2).
 
 ### A-10 · Medium · Mutations of class-irrelevant genes waste evaluations
 - Evidence: `mutateTactics` (strategy.ts:196-236) mutates e.g.
@@ -198,9 +201,14 @@ paired with in that run (A-6).
   true; documented as "enter Rage on the first turn". Rage also has no
   per-rest use limit, and Second Wind / Action Surge refresh every fight
   (botRun.ts:564) instead of per short rest.
-- Fix in core: the gene keeps its name but is documented as "uses Rage"; rage,
-  second wind and action surge stay per-fight resources (documented rules
-  simplification). Rules fidelity beyond that is deferred.
+- Fix in core: limited uses follow SRD 5.1 and live on the battler
+  (`resources`, plain JSON): Rage 2–6 uses per **long** rest by barbarian
+  level; Second Wind 1 and Action Surge 1 (2 from fighter 17) per **short**
+  rest. Rests happen between levels (a long one before floors 5, 10, … or with
+  a rest kit), so uses are spent across the fights of a level. The timing genes
+  now trade off: `openWithRage` = rage from the first turn of every fight vs.
+  hold it for boss fights; `secondWindAtHpFrac` / `actionSurgeEarly` decide
+  when a scarce use is spent. **Fixed in core** (genome v2, CORE_VERSION 0.2.0).
 
 ### A-13 · Medium · Hitting `MAX_STEPS` on the last level counts as a win
 - Evidence: botRun.ts:873-874 `finishRun(this.levelIndex >= this.levels.length - 1)`.
@@ -230,9 +238,12 @@ paired with in that run (A-6).
   if "better" (botRun.ts:499-538).
 - Impact: depth/XP trade-offs (explore more for XP vs. descend safely) — a big
   lever on fitness — are not learnable.
-- Fix in core: new `exploreCoverage` gene (0.3–0.95) read by the run loop.
-  Loot choice stays a fixed heuristic (recommended as a v2 gene: per-stat
-  weights).
+- Fix in core: new `exploreCoverage` gene (0.3–0.95) read by the run loop;
+  genome v2 adds loot-preference genes `lootHp`, `lootAc`, `lootToHit`,
+  `lootDamage`, `lootSpeed` (0–1) that weight artifact picks and trinket swaps
+  (`lootWeights`, `pickArtifact`). At 0.5 they equal the legacy fixed
+  heuristic, which is what v1 genomes migrate to. Weapons are still swapped by
+  average damage and armour by AC. **Fixed in core** (genome v2).
 
 ### A-17 · Medium · Reward is exploitable by healing/damage farming
 - Evidence: `healing` and `damage` are rewarded per point (reward.ts:112-113)
@@ -263,8 +274,14 @@ paired with in that run (A-6).
   stays pending (botAI.ts:245-248, :436).
 - Fixed in core: Second Wind uses fighter level; ally healing requires a
   touch-range spell's target to be adjacent (Healing Word keeps its range);
-  a pending Frenzy swing is cleared at end of turn. Self-inspiration is kept as
-  a documented simplification.
+  a pending Frenzy swing is cleared at end of turn. Bardic Inspiration (v2)
+  follows SRD 5.1: a bonus action that gives the nearest **ally** within 60 ft
+  a die (d6/d8/d10/d12 by bard level), CHA-mod uses per long rest (short rest
+  from bard 5); the ally adds the die to an attack roll that would miss (no
+  blanket advantage). **Solo**, RAW leaves no legal target, so the bard spends
+  its dice on Lore's **Cutting Words** instead (which now costs a use and rolls
+  the bard's die, as in the SRD) — `inspireBeforeAttack` decides between
+  inspiring allies and keeping dice for Cutting Words. **Fixed in core.**
 
 ### A-21 · Medium · Half-casters lose spell slots after the first rest or level-up
 - Evidence: `casterSlotsMulti` (arena/progression.ts:124-140) always uses the
@@ -341,7 +358,9 @@ Legacy: **no**.
   seed set is not defined anywhere, so "the score of a genome" is undefined.
 
 Core (this repo):
-- `Genome = { schema: 'dungeon-gym/genome', version: 1, classKey, genes }`.
+- `Genome = { schema: 'dungeon-gym/genome', version: 2, classKey, genes }`.
+  `parseGenome` / `validateGenome` also accept version 1 (strictly, against
+  the v1 field set) and migrate it (`migrateGenesV1`); output is always v2.
 - `parseGenome(text)` is strict: rejects unknown/missing fields, wrong types,
   out-of-range values, unknown classes and oversize payloads (> 4 KiB);
   returns a typed error list. `serializeGenome` emits canonical JSON (fixed key
