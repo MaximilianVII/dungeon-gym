@@ -1,5 +1,7 @@
 # Dungeon Gym — core
 
+[![CI](https://github.com/MaximilianVII/dungeon-gym/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/MaximilianVII/dungeon-gym/actions/workflows/ci.yml)
+
 The deterministic, headless engine of **Dungeon Gym**: a turn-based dungeon
 roguelite (SRD 5.1 rules subset) where you train bots instead of playing by
 hand. A bot's behaviour is a small **genome**; parties of bots crawl
@@ -17,9 +19,32 @@ npm install
 npm test            # vitest
 npm run typecheck   # tsc --noEmit (strict)
 npm run coverage    # coverage report (core ≥ 80 %)
+npm run check       # all of CI: typecheck, coverage, bench:check, CLI smoke
 ```
 
-Node 20+.
+Node 20+. See [CONTRIBUTING.md](CONTRIBUTING.md) for the rule-change rule
+(`CORE_VERSION` → `npm run bench:update`) and the SRD-only content policy.
+
+## Install as a dependency
+
+The package ships a bundled ESM build (`dist/index.mjs`, no runtime
+dependencies) with one self-contained `dist/index.d.ts`, plus the
+`dungeon-gym` CLI bin. `prepare` builds `dist/` on install from git or a
+fresh clone.
+
+```bash
+npm install github:MaximilianVII/dungeon-gym#<commit-sha>
+```
+
+```bash
+npm install file:../dungeon-gym
+```
+
+`file:` links the folder, so build it there first (`npm ci` does, via
+`prepare`). With npm 11+ a git dependency's `prepare` may be held back by the
+install-script allowlist; approve it with `npm install-scripts approve
+dungeon-gym-core`. Trained genomes are importable as
+`dungeon-gym-core/genomes/<class>.json` once the nightly workflow has produced them.
 
 ## Use the core
 
@@ -97,6 +122,11 @@ measures runs per second and `report` prints the balance telemetry
 | `src/bot/` | genome schema, bot combat policy, the run state machine, reward |
 | `src/train/` | evaluation, benchmark, trainer, hall of fame |
 | `docs/genome-audit.md` | audit of the legacy genome/learning logic and what changed |
+| `cli/` | Node CLI and `worker_threads` pool |
+| `bench/baseline.json` | benchmark scores of the 12 baseline genomes (regression guard) |
+| `genomes/` | trained champion genomes, maintained by the nightly workflow |
+| `scripts/` | build, CLI smoke test, `bench:check`/`bench:update`, `pack:check`, nightly training |
+| `.github/` | CI, nightly training, Dependabot, issue and PR templates |
 
 ## Determinism contract
 
@@ -105,7 +135,41 @@ measures runs per second and `report` prints the balance telemetry
 - RNG state lives inside the run / trainer state.
 - Only IEEE-exact arithmetic in the simulation.
 - `CORE_VERSION` must be bumped whenever a rules change can alter any run's
-  outcome; benchmark ids include it.
+  outcome; benchmark ids include it. `npm run bench:check` (run in CI)
+  fails if the baseline scores move without a bump; after a bump, run
+  `npm run bench:update` and commit `bench/baseline.json`.
+
+## Automation
+
+| Workflow | When | What |
+|---|---|---|
+| `ci.yml` | push to `main`, every PR, manual | Ubuntu + Windows × Node 20, 22: `npm ci`, typecheck, tests with ≥ 80 % coverage, build, CLI smoke (`train` → `validate` → `bench`), `bench:check`; plus `npm pack` + consumer install and `actionlint` |
+| `nightly-train.yml` | daily 03:23 UTC, manual (`generations`, `seed`, `classes`, `min-gain`) | trains all 12 classes with the CLI trainer (fixed seed 1) from the current champions, re-scores before/after on the benchmark and, if any class improved, opens or updates the PR `automation/nightly-train` with `genomes/*.json` and `genomes/TRAINING_REPORT.md` |
+| Dependabot | weekly, Monday | npm dev dependencies (grouped) and GitHub Actions |
+
+The training job only has `contents: read`; a separate job with
+`contents: write` + `pull-requests: write` opens the PR. Every run is
+reproducible from the commit, seed and generations in the report.
+
+### Repository settings needed
+
+1. **Settings → Actions → General → Workflow permissions**: keep the default
+   *Read repository contents* and tick **Allow GitHub Actions to create and
+   approve pull requests** (otherwise the nightly PR step fails with 403).
+2. **Settings → Branches → add a rule (or ruleset) for `main`**: require a pull
+   request and the status checks `test (ubuntu-latest, node 20)`,
+   `test (ubuntu-latest, node 22)`, `test (windows-latest, node 20)`,
+   `test (windows-latest, node 22)`, `package (npm pack + consumer install)` and
+   `lint workflows (actionlint)` (they appear after the first CI run).
+3. **Settings → Code security → Dependabot**: enable *Dependabot alerts* and
+   *security updates* (version updates come from `.github/dependabot.yml`).
+4. Optional: PRs opened with `GITHUB_TOKEN` do **not** trigger CI. To get
+   checks on the nightly PR, add a secret `NIGHTLY_PR_TOKEN` (fine-grained PAT
+   for this repo with *Contents* and *Pull requests* read/write, or a GitHub App
+   token); the workflow uses it automatically. Without it, close and reopen the
+   PR to start CI.
+5. Scheduled workflows are paused after 60 days without repository activity;
+   re-enable *Nightly training* under **Actions** if that happens.
 
 ## License
 

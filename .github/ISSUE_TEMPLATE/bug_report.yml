@@ -1,0 +1,33 @@
+name: Bug report
+description: Something in the core, the CLI or the benchmark behaves wrongly
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what you got.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: |
+        Runs are deterministic, so a seed + genome reproduces everything.
+        Paste the CLI command or code, the seed, and the genome JSON (or its hash).
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: CORE_VERSION / commit
+      placeholder: 0.3.0 @ 123959c
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Node version and OS
+      placeholder: Node 22.11, Windows 11
