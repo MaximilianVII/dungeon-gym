@@ -1,0 +1,30 @@
+name: Feature or balance proposal
+description: New rules, genes, trainer features or a balance change
+labels: [enhancement]
+body:
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What should change and why.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Rules / combat (changes run outcomes → CORE_VERSION bump)
+        - Genome / bot policy
+        - Trainer / benchmark
+        - CLI / packaging
+        - Docs
+    validations:
+      required: true
+  - type: checkboxes
+    id: srd
+    attributes:
+      label: Content licence
+      options:
+        - label: Any game content involved comes from the SRD 5.1 (CC-BY-4.0) only
+          required: true

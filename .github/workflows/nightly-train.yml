@@ -1,0 +1,89 @@
+name: Nightly training
+
+on:
+  schedule:
+    - cron: '23 3 * * *' # 03:23 UTC, default branch only
+  workflow_dispatch:
+    inputs:
+      generations:
+        description: Generations per class
+        default: '40'
+      seed:
+        description: Trainer seed (fixed, so every run is reproducible)
+        default: '1'
+      classes:
+        description: Comma-separated classes (empty = all 12)
+        default: ''
+      min-gain:
+        description: Minimum benchmark gain needed to replace a champion
+        default: '0'
+
+permissions: {}
+
+concurrency:
+  group: nightly-train
+  cancel-in-progress: false
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    outputs:
+      improved: ${{ steps.train.outputs.improved }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+      - name: Train all classes and compare with genomes/<class>.json
+        id: train
+        env:
+          GENERATIONS: ${{ inputs.generations || '40' }}
+          SEED: ${{ inputs.seed || '1' }}
+          CLASSES: ${{ inputs.classes || '' }}
+          MIN_GAIN: ${{ inputs.min-gain || '0' }}
+        run: >-
+          node scripts/nightly-train.mjs
+          --generations "$GENERATIONS" --seed "$SEED" --classes "$CLASSES" --min-gain "$MIN_GAIN"
+          --report genomes/TRAINING_REPORT.md
+      - uses: actions/upload-artifact@v7
+        with:
+          name: nightly-genomes
+          path: genomes/
+          retention-days: 14
+
+  # Separate job so the write token never sits next to the training run.
+  pull-request:
+    needs: train
+    if: needs.train.outputs.improved == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: nightly-genomes
+          path: genomes
+      - uses: peter-evans/create-pull-request@v8
+        with:
+          # PRs opened with GITHUB_TOKEN do not trigger CI; an optional
+          # NIGHTLY_PR_TOKEN secret (fine-grained PAT / app token) fixes that.
+          token: ${{ secrets.NIGHTLY_PR_TOKEN || github.token }}
+          branch: automation/nightly-train
+          delete-branch: true
+          add-paths: |
+            genomes/*.json
+            genomes/TRAINING_REPORT.md
+          commit-message: 'feat(genomes): nightly training results'
+          title: 'feat(genomes): nightly training results'
+          body-path: genomes/TRAINING_REPORT.md

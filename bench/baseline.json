@@ -1,0 +1,78 @@
+{
+  "benchmarkId": "dungeon-gym/bench-v1@0.3.0",
+  "coreVersion": "0.3.0",
+  "genomes": {
+    "barbarian": {
+      "genomeHash": "4e64c1aa",
+      "score": 98.40625,
+      "wins": 6,
+      "scoresHash": "5bb8b1ca"
+    },
+    "bard": {
+      "genomeHash": "25b07412",
+      "score": 43.53125,
+      "wins": 0,
+      "scoresHash": "35f9a26f"
+    },
+    "cleric": {
+      "genomeHash": "5aef5733",
+      "score": 74.6875,
+      "wins": 0,
+      "scoresHash": "5ec36242"
+    },
+    "druid": {
+      "genomeHash": "65f3aa97",
+      "score": 46.375,
+      "wins": 0,
+      "scoresHash": "271cd207"
+    },
+    "fighter": {
+      "genomeHash": "88350206",
+      "score": 127.375,
+      "wins": 13,
+      "scoresHash": "95d1894e"
+    },
+    "monk": {
+      "genomeHash": "8cbafa11",
+      "score": 96.90625,
+      "wins": 6,
+      "scoresHash": "a016803b"
+    },
+    "paladin": {
+      "genomeHash": "c0d0b406",
+      "score": 105.53125,
+      "wins": 7,
+      "scoresHash": "77429515"
+    },
+    "ranger": {
+      "genomeHash": "9d33c9ff",
+      "score": 70.09375,
+      "wins": 1,
+      "scoresHash": "5f9043b4"
+    },
+    "rogue": {
+      "genomeHash": "2d7d2b61",
+      "score": 82,
+      "wins": 3,
+      "scoresHash": "23d7e10b"
+    },
+    "sorcerer": {
+      "genomeHash": "30fb8c35",
+      "score": 60.34375,
+      "wins": 1,
+      "scoresHash": "6679220e"
+    },
+    "warlock": {
+      "genomeHash": "5e78f195",
+      "score": 53.0625,
+      "wins": 0,
+      "scoresHash": "8cac1303"
+    },
+    "wizard": {
+      "genomeHash": "2130660c",
+      "score": 66.8125,
+      "wins": 2,
+      "scoresHash": "1cc19fb1"
+    }
+  }
+}
