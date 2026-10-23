@@ -7,7 +7,8 @@ export { seedRng, nextFloat, rngOf, makeRng, randInt, hashString, deriveSeed, ty
 
 // Genome (the uploadable artifact)
 export {
-  GENOME_SCHEMA, GENOME_VERSION, MAX_GENOME_CHARS, MAX_LEVEL_UP_ORDER, DEFAULT_GENES, GENE_ORDER, NUMERIC_GENES, BOOLEAN_GENES,
+  GENOME_SCHEMA, GENOME_VERSION, MAX_GENOME_CHARS, MAX_LEVEL_UP_ORDER, DEFAULT_GENES, GENE_ORDER, NUMERIC_GENES, BOOLEAN_GENES, LOOT_GENES,
+  migrateGenesV1, lootWeights, type GenesV1,
   baselineGenome, makeGenome, clampGenes, validateGenome, parseGenome, serializeGenome, genomeHash,
   relevantGenes, mutateGenome, crossoverGenomes, roleOf, describeGenes,
   type Genes, type Genome, type GeneKey, type GenomeParseResult, type MutateOptions, type RelevanceContext, type Role,
@@ -19,7 +20,8 @@ export {
   createRun, stepRun, runToEnd, playRun, isRunDone, runResult, runSnapshot, cloneRunState, equipFoundGear,
   type RunConfig, type RunState, type RunResult, type MemberResult, type RunSnapshot, type PartyMemberInit, type EndReason, type RunPhase, type DeathCause, type GearSlot,
 } from './bot/run'
-export { botPlayerTurn, type FightFlags } from './bot/policy'
+export { botPlayerTurn } from './bot/policy'
+export { maxResources, restoreResources, rageUses, bardicDie, type ClassResources } from './combat/abilities'
 export { DEFAULT_REWARD, BENCHMARK_REWARD, REWARD_PRESETS, clampReward, memberFitness, diversityBonus, type RewardConfig, type FitnessInput } from './bot/reward'
 export { mergeUsage, type UsageTally } from './bot/usage'
 export { aggregate, totals, resultsCSV, type ClassStat, type Totals } from './bot/stats'
@@ -45,6 +47,8 @@ export { Tile, type GameMap, type Vec2 } from './game/types'
 export { generateRun, generateLevelForRun, RUN_LENGTH } from './dungeon/generate'
 export type { Level, EnemySpawn } from './dungeon/levels'
 export { MONSTERS, getMonster, type MonsterBlock } from './combat/monsters'
+export { ARTIFACTS, DEFAULT_LOOT_WEIGHTS, effectScore, pickArtifact, type Artifact, type ArtifactEffect, type LootWeights } from './items/artifacts'
+export { GEAR, type GearItem } from './items/gear'
 export { SUBCLASS_CATALOGUE } from './combat/subclasses'
 export { SPELL_NAMES } from './combat/spells'
 export type { Battler, CombatAttack, Condition } from './combat/types'

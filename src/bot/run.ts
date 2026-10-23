@@ -13,13 +13,14 @@ import { isOutOfFight, removeCondition, type Battler, type CombatAttack } from '
 import { generateLevelForRun, RUN_LENGTH } from '../dungeon/generate'
 import type { Level } from '../dungeon/levels'
 import { applyXp, monsterXp } from '../dungeon/leveling'
-import { artifactScore, drawRewards, effectScore, getArtifact, type ArtifactEffect } from '../items/artifacts'
+import { drawRewards, effectScore, getArtifact, pickArtifact, type ArtifactEffect, type LootWeights } from '../items/artifacts'
 import { GEAR, usableGear, type GearItem } from '../items/gear'
 import { buildCharacter, starterSpec, validateCharacterSpec, type CharacterSpec, type ClassKey } from '../character/build'
 import { casterSlots, profBonus } from '../character/progression'
 import { deriveSeed, rngOf, seedRng, type RngState } from '../rng'
-import { genomeHash, validateGenome, type Genes, type Genome } from './genome'
-import { botPlayerTurn, type FightFlags } from './policy'
+import { genomeHash, lootWeights, validateGenome, type Genes, type Genome } from './genome'
+import { botPlayerTurn } from './policy'
+import { maxResources, restoreResources } from '../combat/abilities'
 import type { UsageTally } from './usage'
 
 // ---------------------------------------------------------------------------
@@ -101,7 +102,6 @@ export interface MemberState {
   /** Found gear by slot (keys of items/gear). One item per slot — no stacking. */
   equipped: Partial<Record<GearSlot, string>>
   battler: Battler
-  flags: FightFlags
   usage: UsageTally
   /** Artifact keys picked so far (their bonuses stack — each is unique). */
   owned: string[]
@@ -294,7 +294,15 @@ function deriveBattler(m: MemberState, prev: Battler | null, refillSlots: boolea
   b.initiative = prev.initiative
   if (!refillSlots) b.spellSlots = [...(prev.spellSlots ?? [])]
   if (prev.darkOneLuckUsed) b.darkOneLuckUsed = true
-  if (prev.cuttingWordsUsed) b.cuttingWordsUsed = true
+  // Limited uses carry over; a level-up adds whatever its new levels grant.
+  if (prev.resources && b.resources) {
+    const cha = m.spec.abilityScores.cha
+    const before = maxResources(prev.classLevels ?? m.spec.classLevels, cha)
+    const now = b.resources
+    const keep = (k: keyof typeof now): number => Math.max(0, prev.resources![k] + now[k] - before[k])
+    b.resources = { rage: keep('rage'), secondWind: keep('secondWind'), actionSurge: keep('actionSurge'), inspiration: keep('inspiration') }
+  }
+  if (prev.inspirationDie !== undefined) b.inspirationDie = prev.inspirationDie
   return b
 }
 
@@ -325,7 +333,6 @@ export function createRun(config: RunConfig): RunState {
       startLevel: charLevelOf(spec.classLevels),
       equipped: {},
       battler: null as unknown as Battler,
-      flags: { surgeUsed: false, secondWindUsed: false },
       usage: {},
       owned: [],
       xp: 0,
@@ -559,6 +566,7 @@ function restParty(s: RunState, long: boolean): void {
   for (const m of s.members) {
     if (!m.alive) continue
     const b = m.battler
+    b.resources = restoreResources(b.resources ?? maxResources(m.spec.classLevels, m.spec.abilityScores.cha), m.spec.classLevels, m.spec.abilityScores.cha, long)
     if (long) {
       b.hp = b.maxHp
       b.spellSlots = [...buildCharacter(m.spec).spellSlots]
@@ -582,29 +590,31 @@ function avgDamage(a: CombatAttack): number {
   return (a.damage.count * (a.damage.sides + 1)) / 2 + a.damage.bonus
 }
 
-function gearEffectScore(key: string | undefined): number {
+function gearEffectScore(key: string | undefined, w: LootWeights): number {
   const item = key ? gearByKey(key) : undefined
-  return item?.effect ? effectScore(item.effect) : -Infinity
+  return item?.effect ? effectScore(item.effect, w) : -Infinity
 }
 
 /** The slot a found item would go into (a ring takes a free or the weaker ring slot). */
-function slotFor(m: MemberState, item: GearItem): GearSlot {
+function slotFor(m: MemberState, item: GearItem, w: LootWeights): GearSlot {
   if (item.kind !== 'ring') return item.kind
   if (!m.equipped.ring1) return 'ring1'
   if (!m.equipped.ring2) return 'ring2'
-  return gearEffectScore(m.equipped.ring1) <= gearEffectScore(m.equipped.ring2) ? 'ring1' : 'ring2'
+  return gearEffectScore(m.equipped.ring1, w) <= gearEffectScore(m.equipped.ring2, w) ? 'ring1' : 'ring2'
 }
 
-/** Equip a found gear item if it beats what is in its slot (one item per slot). */
+/** Equip a found gear item if it beats what is in its slot (one item per slot).
+ *  Trinkets are compared by the member's loot genes. */
 export function equipFoundGear(m: MemberState, item: GearItem): void {
-  const slot = slotFor(m, item)
+  const w = lootWeights(m.genes)
+  const slot = slotFor(m, item, w)
   if (m.equipped[slot] === item.key) return
   if (item.attack) {
     const cur = m.battler.attacks.find(isWeapon)
     if (cur && avgDamage(item.attack) + flatBonus(m).damageBonus <= avgDamage(cur)) return
   } else if (item.kind === 'armor') {
     if ((item.effect?.ac ?? 0) <= (gearByKey(m.equipped.armor ?? '')?.effect?.ac ?? 0)) return
-  } else if (!item.effect || effectScore(item.effect) <= gearEffectScore(m.equipped[slot])) {
+  } else if (!item.effect || effectScore(item.effect, w) <= gearEffectScore(m.equipped[slot], w)) {
     return
   }
   m.equipped = { ...m.equipped, [slot]: item.key }
@@ -628,8 +638,7 @@ function grantReward(s: RunState, rng: Rng): void {
     }
     const choices = drawRewards(rng, s.levelIndex, m.owned)
     if (choices.length === 0) continue
-    let best = choices[0]
-    for (const a of choices) if (artifactScore(a) > artifactScore(best)) best = a
+    const best = pickArtifact(choices, lootWeights(m.genes))
     m.owned.push(best.key)
     m.battler = deriveBattler(m, m.battler, false)
   }
@@ -680,8 +689,6 @@ function startCombat(s: RunState, spotter: Spawn, rng: Rng): void {
     b.deathSaves = { successes: 0, failures: 0, stable: false, dead: false }
     // Once-per-fight features refresh with every fight.
     b.darkOneLuckUsed = false
-    b.cuttingWordsUsed = false
-    m.flags = { surgeUsed: false, secondWindUsed: false }
   })
   const enemies = engaged
     .map((e) => {
@@ -877,7 +884,7 @@ function combatStep(s: RunState, c: CombatState, rng: Rng, decide: Rng): void {
   const enemyHpBefore = sumHp(battlers, 'enemy')
   const partyHpBefore = sumHp(battlers, 'player')
   const upBefore = enemiesUp(battlers)
-  botPlayerTurn(actor, battlers, currentLevel(s).map, rng, decide, member.flags, member.genes, member.usage)
+  botPlayerTurn(actor, battlers, currentLevel(s).map, rng, decide, member.genes, member.usage)
   member.damage += Math.max(0, enemyHpBefore - sumHp(battlers, 'enemy'))
   member.healing += Math.max(0, sumHp(battlers, 'player') - partyHpBefore)
   member.kills += Math.max(0, upBefore - enemiesUp(battlers))

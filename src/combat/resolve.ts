@@ -3,6 +3,7 @@ import type { Vec2 } from '../game/types'
 import { addCondition, hasCondition, removeCondition, type Battler, type CombatAttack, type CombatEvent, type Condition } from './types'
 import { effectsOf, findEffect } from './subclasses'
 import { VAMPIRIC_LIFESTEAL } from './affixes'
+import { bardicDie } from './abilities'
 
 // ---------------------------------------------------------------------------
 // 5e-lite resolution: attack rolls, damage, and player death saving throws.
@@ -91,13 +92,22 @@ export function resolveAttack(
   for (const e of effectsOf(attacker)) if (e.kind === 'critRange') critOn = Math.min(critOn, e.range)
   const crit = roll.value >= critOn
   let total = roll.value + attack.toHit
-  // Bard Lore — Cutting Words (once per fight): subtract 1d6 from a hit
-  // against the bard, which can turn it into a miss (a natural 20 still hits).
-  if (findEffect(target, 'cuttingWords') && !target.cuttingWordsUsed && target.team !== attacker.team) {
+  // Bardic Inspiration: an inspired attacker who would miss adds the die
+  // (spent only when it is needed; a natural 1 still misses).
+  if (hasCondition(attacker, 'inspired') && !roll.nat1 && !roll.nat20 && !crit && total < target.ac) {
+    total += rollDie(rng, attacker.inspirationDie ?? 6)
+    removeCondition(attacker, 'inspired')
+    delete attacker.inspirationDie
+  }
+  // Bard Lore — Cutting Words (reaction, spends a Bardic Inspiration use):
+  // subtract the bard's die from a hit against the bard, which can turn it
+  // into a miss (a natural 20 still hits).
+  const res = target.resources
+  if (findEffect(target, 'cuttingWords') && res && res.inspiration > 0 && target.team !== attacker.team) {
     const provisionalHit = roll.nat20 || (!roll.nat1 && total >= target.ac)
     if (provisionalHit) {
-      total -= rollDie(rng, 6)
-      target.cuttingWordsUsed = true
+      total -= rollDie(rng, bardicDie(target.classLevels?.bard ?? target.charLevel ?? 1))
+      res.inspiration -= 1
     }
   }
   const hit = roll.nat20 || (!roll.nat1 && (total >= target.ac || crit))
@@ -199,14 +209,13 @@ export function resolveAreaAttack(
 
 /**
  * Net advantage / disadvantage on an attack from conditions (they cancel out,
- * per 5e). Inspired attacker / restrained-or-prone target grant advantage; a
+ * per 5e). A restrained or prone target grants advantage; a
  * frightened/poisoned/restrained attacker or a dodging target imposes
  * disadvantage. Prone gives advantage in melee, disadvantage at range.
  */
 export function combatMode(attacker: Battler, target: Battler, attack: CombatAttack): D20Mode {
   let adv = 0
   let dis = 0
-  if (hasCondition(attacker, 'inspired')) adv++
   if (hasCondition(attacker, 'frightened')) dis++
   if (hasCondition(attacker, 'poisoned')) dis++
   if (hasCondition(attacker, 'restrained')) dis++

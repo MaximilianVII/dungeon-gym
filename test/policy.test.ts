@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { botPlayerTurn, pathStep, type FightFlags } from '../src/bot/policy'
+import { botPlayerTurn, pathStep } from '../src/bot/policy'
+import type { ClassResources } from '../src/combat/abilities'
 import { buildEnemyBattler, buildPlayerBattler } from '../src/combat/setup'
 import { CULTIST, GOBLIN } from '../src/combat/monsters'
 import { hasCondition, type Battler } from '../src/combat/types'
@@ -26,11 +27,11 @@ function foe(pos: Vec2, hp = 100, ac?: number, block = GOBLIN): Battler {
   return g
 }
 
-function turn(b: Battler, battlers: Battler[], g: Genes, flags: Partial<FightFlags> = {}, seed = 1): { tally: UsageTally; flags: FightFlags } {
+function turn(b: Battler, battlers: Battler[], g: Genes, res: Partial<ClassResources> = {}, seed = 1): { tally: UsageTally } {
   const tally: UsageTally = {}
-  const f: FightFlags = { surgeUsed: false, secondWindUsed: false, ...flags }
-  botPlayerTurn(b, battlers, testMap, makeRng(seed), makeRng(seed + 1000), f, g, tally)
-  return { tally, flags: f }
+  if (b.resources) Object.assign(b.resources, res)
+  botPlayerTurn(b, battlers, testMap, makeRng(seed), makeRng(seed + 1000), g, tally)
+  return { tally }
 }
 
 describe('bonus actions', () => {
@@ -62,12 +63,12 @@ describe('bonus actions', () => {
   it('Second Wind heals 1d10 + fighter level, once per fight', () => {
     const f = bot('fighter', { x: 2, y: 4 })
     f.hp = 5
-    const { tally, flags } = turn(f, [f, foe({ x: 3, y: 4 })], genes({ secondWindAtHpFrac: 0.9 }))
+    const { tally } = turn(f, [f, foe({ x: 3, y: 4 })], genes({ secondWindAtHpFrac: 0.9 }))
     expect(tally['Second Wind']).toBe(1)
-    expect(flags.secondWindUsed).toBe(true)
+    expect(f.resources?.secondWind).toBe(0)
     expect(f.hp).toBeGreaterThanOrEqual(5 + 1 + 5)
     expect(f.hp).toBeLessThanOrEqual(5 + 10 + 5)
-    const again = turn(f, [f, foe({ x: 3, y: 4 })], genes({ secondWindAtHpFrac: 0.9 }), { secondWindUsed: true })
+    const again = turn(f, [f, foe({ x: 3, y: 4 })], genes({ secondWindAtHpFrac: 0.9 }), { secondWind: 0 })
     expect(again.tally['Second Wind']).toBeUndefined()
   })
 
@@ -80,11 +81,11 @@ describe('bonus actions', () => {
     expect(hasCondition(m2, 'dodging')).toBe(false)
   })
 
-  it('Bardic Inspiration is gated by its gene', () => {
+  it('Bardic Inspiration (on an ally) is gated by its gene', () => {
     const b = bot('bard', { x: 2, y: 4 })
-    expect(turn(b, [b, foe({ x: 3, y: 4 })], genes({ inspireBeforeAttack: true })).tally['Bardic Inspiration']).toBe(1)
+    expect(turn(b, [b, bot('fighter', { x: 2, y: 7 }, 'p1'), foe({ x: 3, y: 4 })], genes({ inspireBeforeAttack: true })).tally['Bardic Inspiration']).toBe(1)
     const b2 = bot('bard', { x: 2, y: 4 })
-    expect(turn(b2, [b2, foe({ x: 3, y: 4 })], genes({ inspireBeforeAttack: false })).tally['Bardic Inspiration']).toBeUndefined()
+    expect(turn(b2, [b2, bot('fighter', { x: 2, y: 7 }, 'p1'), foe({ x: 3, y: 4 })], genes({ inspireBeforeAttack: false })).tally['Bardic Inspiration']).toBeUndefined()
   })
 
   it('Cunning Action doubles a rogue’s movement', () => {
@@ -191,7 +192,7 @@ describe('targeting', () => {
       const f = bot('fighter', { x: 8, y: 4 })
       const strong = foe({ x: 9, y: 4 }, 100, -100)
       const weak = foe({ x: 7, y: 4 }, 1, -100)
-      turn(f, [f, strong, weak], genes({ focusWeakest, focusCasters: 0 }), { surgeUsed: true })
+      turn(f, [f, strong, weak], genes({ focusWeakest, focusCasters: 0 }), { actionSurge: 0 })
       return weak
     }
     expect(run(true).hp).toBe(0)
@@ -203,7 +204,7 @@ describe('targeting', () => {
       const f = bot('fighter', { x: 8, y: 4 })
       const cultist = foe({ x: 9, y: 4 }, 100, -100, CULTIST)
       const goblin = foe({ x: 7, y: 4 }, 1, -100)
-      turn(f, [f, cultist, goblin], genes({ focusWeakest: true, focusCasters }), { surgeUsed: true })
+      turn(f, [f, cultist, goblin], genes({ focusWeakest: true, focusCasters }), { actionSurge: 0 })
       return { cultist, goblin }
     }
     const always = run(1)

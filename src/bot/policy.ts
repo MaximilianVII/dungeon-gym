@@ -4,8 +4,9 @@ import { tileDistance } from '../game/logic'
 import { lineOfSight } from '../game/los'
 import { rollDamage, type DamageDice, type Rng } from '../combat/dice'
 import { resolveAttack, resolveAreaAttack, combatMode } from '../combat/resolve'
-import { addCondition, hasCondition, removeCondition, type Battler, type CombatAttack } from '../combat/types'
+import { addCondition, hasCondition, type Battler, type CombatAttack } from '../combat/types'
 import { findEffect } from '../combat/subclasses'
+import { bardicDie } from '../combat/abilities'
 import type { Genes } from './genome'
 import type { UsageTally } from './usage'
 
@@ -26,11 +27,8 @@ import type { UsageTally } from './usage'
 // Pure apart from mutating the battlers and advancing the two RNGs.
 // ---------------------------------------------------------------------------
 
-/** Per-fight resources (reset when a fight starts). */
-export interface FightFlags {
-  surgeUsed: boolean
-  secondWindUsed: boolean
-}
+/** Bardic Inspiration reaches a creature within 60 ft. */
+const INSPIRE_RANGE = 12
 
 function avg(d: DamageDice): number {
   return d.count * (d.sides + 1) / 2 + d.bonus
@@ -207,7 +205,6 @@ function makeAttack(rng: Rng, bot: Battler, atk: CombatAttack, target: Battler, 
   rec(atk.name)
   if (atk.area) resolveAreaAttack(rng, bot, atk, target.pos, battlers, atk.area)
   else resolveAttack(rng, bot, atk, target, combatMode(bot, target, atk))
-  removeCondition(bot, 'inspired')
 }
 
 /** Healing from a heal action, with the Life domain bonus. */
@@ -219,26 +216,32 @@ function healAmount(rng: Rng, bot: Battler, h: CombatAttack): number {
 }
 
 /** Play the bot's whole turn (mutates battlers + both RNGs), driven by its genes.
- *  `tally` counts each named action used, for usage statistics. */
+ *  Limited-use features are spent from `bot.resources`. `tally` counts each
+ *  named action used, for usage statistics. */
 export function botPlayerTurn(
   bot: Battler,
   battlers: Battler[],
   map: GameMap,
   rng: Rng,
   decide: Rng,
-  flags: FightFlags,
   genes: Genes,
   tally?: UsageTally,
 ): void {
   try {
-    playTurn(bot, battlers, map, rng, decide, flags, genes, tally)
+    playTurn(bot, battlers, map, rng, decide, genes, tally)
   } finally {
     // A Frenzy swing not spent this turn (e.g. a ranged turn) is lost.
     bot.frenzyAttackPending = false
   }
 }
 
-function playTurn(bot: Battler, battlers: Battler[], map: GameMap, rng: Rng, decide: Rng, flags: FightFlags, genes: Genes, tally?: UsageTally): void {
+/** The nearest living ally within reach that holds no inspiration yet. */
+function inspireTarget(bot: Battler, battlers: Battler[]): Battler | undefined {
+  const cands = livingAllies(battlers, bot.id).filter((a) => !hasCondition(a, 'inspired') && tileDistance(bot.pos, a.pos) <= INSPIRE_RANGE)
+  return nearest(bot.pos, cands)
+}
+
+function playTurn(bot: Battler, battlers: Battler[], map: GameMap, rng: Rng, decide: Rng, genes: Genes, tally?: UsageTally): void {
   if (bot.hp <= 0) return
   const enemies = livingEnemies(battlers)
   if (enemies.length === 0) return
@@ -248,41 +251,63 @@ function playTurn(bot: Battler, battlers: Battler[], map: GameMap, rng: Rng, dec
   }
 
   // Role genes modulate the base knobs: aggression and protect push toward
-  // melee + less retreat; protect also makes the bot dodge sooner.
+  // melee + less retreat (around their 0.5 midpoint); protect also makes the
+  // bot dodge sooner.
   const clamp01 = (v: number): number => Math.max(0, Math.min(1, v))
-  const effKite = clamp01(genes.kite - genes.aggression * 0.4 - genes.protectAllies * 0.3)
+  const effKite = clamp01(genes.kite - (genes.aggression - 0.5) * 0.4 - (genes.protectAllies - 0.5) * 0.3)
   const effRetreatFrac = genes.retreatAtHpFrac * (1 - genes.aggression * 0.5)
   const effPatientAdj = Math.max(1, Math.round(genes.patientDefenseAdj - genes.protectAllies * 2))
   // Probability genes: one policy draw per turn each.
   const preferCasters = decide() < genes.focusCasters
   const reserveSlots = decide() < genes.slotReserve
   const regroupNow = decide() < genes.regroup
+  const rangedStance = decide() < effKite
+  const res = bot.resources ?? { rage: 0, secondWind: 0, actionSurge: 0, inspiration: 0 }
 
   let movement = hasCondition(bot, 'restrained') ? 0 : bot.speedTiles
   const adjCount = (): number => adjacentFoes(bot.pos, battlers)
 
-  // --- Bonus action: a signature class ability (gated by the genes) ---
-  if (findEffect(bot, 'frenzyHaste') && hasCondition(bot, 'raging')) {
-    bot.frenzyAttackPending = true
-    rec('Frenzy')
-  } else if (has(bot, 'rage') && !hasCondition(bot, 'raging') && genes.openWithRage) {
-    addCondition(bot, 'raging')
-    rec('Rage')
-  } else if (has(bot, 'second-wind') && !flags.secondWindUsed && bot.hp < bot.maxHp * genes.secondWindAtHpFrac) {
-    const fighterLevel = bot.classLevels?.fighter ?? 1
-    bot.hp = Math.min(bot.maxHp, bot.hp + rollDamage(rng, { count: 1, sides: 10, bonus: fighterLevel }).total)
-    flags.secondWindUsed = true
-    rec('Second Wind')
-  } else if (has(bot, 'patient-defense') && adjCount() >= effPatientAdj) {
-    addCondition(bot, 'dodging')
-    rec('Patient Defense')
-  } else if (has(bot, 'inspire') && !hasCondition(bot, 'inspired') && genes.inspireBeforeAttack) {
-    addCondition(bot, 'inspired')
-    rec('Bardic Inspiration')
-  } else if (has(bot, 'cunning-dash')) {
-    movement += bot.speedTiles
-    rec('Cunning Action')
+  // --- Bonus action: one signature class ability (gated by genes + uses) ---
+  const bonusAction = (): void => {
+    if (findEffect(bot, 'frenzyHaste') && hasCondition(bot, 'raging')) {
+      bot.frenzyAttackPending = true
+      rec('Frenzy')
+      return
+    }
+    if (has(bot, 'rage') && !hasCondition(bot, 'raging') && res.rage > 0 && (genes.openWithRage || bossFight)) {
+      addCondition(bot, 'raging')
+      res.rage -= 1
+      rec('Rage')
+      return
+    }
+    if (has(bot, 'second-wind') && res.secondWind > 0 && bot.hp < bot.maxHp * genes.secondWindAtHpFrac) {
+      const fighterLevel = bot.classLevels?.fighter ?? 1
+      bot.hp = Math.min(bot.maxHp, bot.hp + rollDamage(rng, { count: 1, sides: 10, bonus: fighterLevel }).total)
+      res.secondWind -= 1
+      rec('Second Wind')
+      return
+    }
+    if (has(bot, 'patient-defense') && adjCount() >= effPatientAdj) {
+      addCondition(bot, 'dodging')
+      rec('Patient Defense')
+      return
+    }
+    if (has(bot, 'inspire') && res.inspiration > 0 && genes.inspireBeforeAttack) {
+      const ally = inspireTarget(bot, battlers)
+      if (ally) {
+        addCondition(ally, 'inspired')
+        ally.inspirationDie = bardicDie(bot.classLevels?.bard ?? 1)
+        res.inspiration -= 1
+        rec('Bardic Inspiration')
+        return
+      }
+    }
+    if (has(bot, 'cunning-dash')) {
+      movement += bot.speedTiles
+      rec('Cunning Action')
+    }
   }
+  bonusAction()
 
   const healSpell = (range: number): CombatAttack | undefined =>
     bot.attacks.find((a) => a.source === 'heal' && !!a.heal && a.range >= range && slotAvailable(bot, a))
@@ -365,7 +390,7 @@ function playTurn(bot: Battler, battlers: Battler[], map: GameMap, rng: Rng, dec
   // the (role-modulated) stance says so.
   const bestRangedAvg = ranged.length ? avg(ranged[0].damage) : 0
   const bestMeleeAvg = melee.length ? avg(melee[0].damage) : 0
-  const prefersRanged = ranged.length > 0 && (melee.length === 0 || bestRangedAvg > bestMeleeAvg * 1.15 || effKite >= 0.5)
+  const prefersRanged = ranged.length > 0 && (melee.length === 0 || bestRangedAvg > bestMeleeAvg * 1.15 || rangedStance)
 
   if (prefersRanged) {
     const r = ranged[0]
@@ -419,11 +444,11 @@ function playTurn(bot: Battler, battlers: Battler[], map: GameMap, rng: Rng, dec
     if (!swing()) break
     any = true
   }
-  if (any && has(bot, 'action-surge') && !flags.surgeUsed) {
+  if (any && has(bot, 'action-surge') && res.actionSurge > 0) {
     const adj = adjacent()
     const lowAdj = adj.some((e) => e.hp < e.maxHp * 0.35)
     if (adj.length > 0 && (genes.actionSurgeEarly || lowAdj)) {
-      flags.surgeUsed = true
+      res.actionSurge -= 1
       rec('Action Surge')
       for (let i = 0; i < Math.max(1, bot.attacksPerAction); i++) if (!swing()) break
     }

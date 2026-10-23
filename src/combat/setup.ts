@@ -4,6 +4,7 @@ import type { Battler, CombatAttack, CombatEvent } from './types'
 import type { MonsterBlock } from './monsters'
 import { rollAffix, applyAffix } from './affixes'
 import { effectsOf, getSubclass } from './subclasses'
+import { maxResources } from './abilities'
 
 // ---------------------------------------------------------------------------
 // Turning sources into Battlers + rolling initiative.
@@ -106,6 +107,7 @@ export function buildPlayerBattler(src: PlayerSource, pos: Vec2): Battler {
     potions: src.potions ?? 0,
     spellSlots: [...src.spellSlots],
     abilities: [...src.abilities],
+    resources: maxResources(src.classLevels, src.abilityScores.cha),
     classLevels: { ...src.classLevels },
     charLevel,
   }

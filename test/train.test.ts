@@ -79,7 +79,7 @@ describe('trainer', () => {
   })
 
   it('actually optimises: the best mean climbs on a synthetic landscape', () => {
-    const s = trainGenerations(createTrainer({ classKey: 'fighter', seed: 11, populationSize: 10, eliteCount: 2, seedsPerGeneration: 2 }), 25, synthetic)
+    const s = trainGenerations(createTrainer({ classKey: 'fighter', seed: 11, populationSize: 10, eliteCount: 2, seedsPerGeneration: 2 }), 60, synthetic)
     const first = s.history[0].bestMean
     const last = s.history[s.history.length - 1].bestMean
     expect(last).toBeGreaterThan(first)

@@ -1,5 +1,6 @@
 import type { Vec2 } from '../game/types'
 import type { DamageDice } from './dice'
+import type { ClassResources } from './abilities'
 
 // ---------------------------------------------------------------------------
 // Combat-layer types. Plain JSON data only (no Set/Map/closures), so a fight in
@@ -78,8 +79,10 @@ export interface Battler {
   charLevel?: number
   /** Warlock Fiend — Dark One's Own Luck reroll fires once per fight. */
   darkOneLuckUsed?: boolean
-  /** Bard Lore — Cutting Words reaction fires once per fight. */
-  cuttingWordsUsed?: boolean
+  /** Limited-use class features (players only); see combat/abilities. */
+  resources?: ClassResources
+  /** Die size of the Bardic Inspiration this creature holds (with 'inspired'). */
+  inspirationDie?: number
   /** Berserker Frenzy — a bonus-action attack waiting to be spent this turn. */
   frenzyAttackPending?: boolean
   /** Signature class ability keys (see combat/abilities). */

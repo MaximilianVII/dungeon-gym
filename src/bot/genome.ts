@@ -1,14 +1,20 @@
 import { CLASS_KEYS, isClassKey, type ClassKey } from '../character/build'
 import { hashString, type Rng } from '../rng'
 import { deepFreeze } from '../freeze'
+import { DEFAULT_LOOT_WEIGHTS, type LootWeights } from '../items/artifacts'
 
 // ---------------------------------------------------------------------------
 // A bot GENOME — the uploadable artifact. One genome = one class's complete
 // playstyle: the tactical knobs the combat policy reads (bot/policy), the role
 // leanings, the exploration appetite, and the class order for mid-run level-ups.
 //
-//   { "schema": "dungeon-gym/genome", "version": 1, "classKey": "wizard",
+//   { "schema": "dungeon-gym/genome", "version": 2, "classKey": "wizard",
 //     "genes": { ... } }
+//
+// Version 2 added the loot-preference genes and made `kite` a per-turn
+// probability. Version-1 payloads are still accepted: they are validated
+// against the v1 field set and migrated (see migrateGenesV1), with defaults
+// chosen to reproduce v1 behaviour.
 //
 // Two entry points with deliberately different strictness:
 //   • parseGenome / validateGenome — STRICT, for anything coming from outside
@@ -21,7 +27,7 @@ import { deepFreeze } from '../freeze'
 // ---------------------------------------------------------------------------
 
 export const GENOME_SCHEMA = 'dungeon-gym/genome'
-export const GENOME_VERSION = 1
+export const GENOME_VERSION = 2
 /** Hard cap on a serialized genome (bytes of UTF-16 code units ≈ bytes for ASCII JSON). */
 export const MAX_GENOME_CHARS = 4096
 /** Level-ups available from the starting level 5 to the cap of 20. */
@@ -34,13 +40,17 @@ export interface Genes {
   secondWindAtHpFrac: number
   /** Retreat below this fraction of max HP (scaled down by aggression). */
   retreatAtHpFrac: number
-  /** Ranged stance: keeps range when kite − 0.4·aggression − 0.3·protect ≥ 0.5. */
+  /** Probability per turn of a ranged stance, shifted by the role genes:
+   *  p = clamp(kite − 0.4·(aggression − 0.5) − 0.3·(protect − 0.5)). A ranged
+   *  option that clearly out-damages melee is used regardless. */
   kite: number
   /** Monk: Patient Defense when at least this many foes are adjacent (minus 2·protect). */
   patientDefenseAdj: number
-  /** Barbarian: uses Rage at all (false = never rages). */
+  /** Barbarian: rage from the first turn of every fight (false = hold the
+   *  limited per-rest Rage uses for boss fights). */
   openWithRage: boolean
-  /** Bard: spends Bardic Inspiration before attacking. */
+  /** Bard: inspire an ally at the first chance (false = keep the dice for
+   *  Cutting Words). */
   inspireBeforeAttack: boolean
   /** Fighter: Action Surge as soon as in melee (vs. only to finish a low foe). */
   actionSurgeEarly: boolean
@@ -62,6 +72,13 @@ export interface Genes {
   aggression: number
   /** Fraction of a level's reachable floor to see before heading for the exit. */
   exploreCoverage: number
+  /** Loot preference weights (0.5 = the v1 fixed heuristic) for picking
+   *  artifacts and trinkets: max HP, AC, to-hit, damage, speed. */
+  lootHp: number
+  lootAc: number
+  lootToHit: number
+  lootDamage: number
+  lootSpeed: number
   /** Class taken at each mid-run level-up (index 0 = first level-up); empty = monoclass. */
   levelUpOrder: ClassKey[]
 }
@@ -73,7 +90,8 @@ export interface Genome {
   genes: Genes
 }
 
-type NumericGene = 'healAtHpFrac' | 'secondWindAtHpFrac' | 'retreatAtHpFrac' | 'kite' | 'patientDefenseAdj' | 'focusCasters' | 'slotReserve' | 'regroup' | 'healAllies' | 'protectAllies' | 'aggression' | 'exploreCoverage'
+type NumericGene = 'healAtHpFrac' | 'secondWindAtHpFrac' | 'retreatAtHpFrac' | 'kite' | 'patientDefenseAdj' | 'focusCasters' | 'slotReserve' | 'regroup' | 'healAllies' | 'protectAllies' | 'aggression' | 'exploreCoverage' | LootGene
+type LootGene = 'lootHp' | 'lootAc' | 'lootToHit' | 'lootDamage' | 'lootSpeed'
 type BooleanGene = 'openWithRage' | 'inspireBeforeAttack' | 'actionSurgeEarly' | 'focusWeakest' | 'potionFirst'
 export type GeneKey = NumericGene | BooleanGene | 'levelUpOrder'
 
@@ -98,7 +116,14 @@ export const NUMERIC_GENES: Record<NumericGene, NumericSpec> = deepFreeze({
   protectAllies: { min: 0, max: 1, step: 0.12 },
   aggression: { min: 0, max: 1, step: 0.12 },
   exploreCoverage: { min: 0.3, max: 0.95, step: 0.08 },
+  lootHp: { min: 0, max: 1, step: 0.15 },
+  lootAc: { min: 0, max: 1, step: 0.15 },
+  lootToHit: { min: 0, max: 1, step: 0.15 },
+  lootDamage: { min: 0, max: 1, step: 0.15 },
+  lootSpeed: { min: 0, max: 1, step: 0.15 },
 })
+
+export const LOOT_GENES: readonly LootGene[] = ['lootHp', 'lootAc', 'lootToHit', 'lootDamage', 'lootSpeed']
 
 export const BOOLEAN_GENES: readonly BooleanGene[] = ['openWithRage', 'inspireBeforeAttack', 'actionSurgeEarly', 'focusWeakest', 'potionFirst']
 
@@ -107,14 +132,18 @@ export const GENE_ORDER: readonly GeneKey[] = [
   'healAtHpFrac', 'secondWindAtHpFrac', 'retreatAtHpFrac', 'kite', 'patientDefenseAdj',
   'openWithRage', 'inspireBeforeAttack', 'actionSurgeEarly', 'focusWeakest', 'potionFirst',
   'focusCasters', 'slotReserve', 'regroup', 'healAllies', 'protectAllies', 'aggression',
-  'exploreCoverage', 'levelUpOrder',
+  'exploreCoverage', 'lootHp', 'lootAc', 'lootToHit', 'lootDamage', 'lootSpeed', 'levelUpOrder',
 ]
+
+/** The v1 field set (no loot genes). */
+const GENE_ORDER_V1: readonly GeneKey[] = GENE_ORDER.filter((k) => !(LOOT_GENES as readonly string[]).includes(k))
 
 export const DEFAULT_GENES: Genes = deepFreeze({
   healAtHpFrac: 0.35,
   secondWindAtHpFrac: 0.5,
   retreatAtHpFrac: 0.15,
-  kite: 0.5,
+  // The migrated v1 default (v1 kite 0.5 with default role genes never kited).
+  kite: 0,
   patientDefenseAdj: 2,
   openWithRage: true,
   inspireBeforeAttack: true,
@@ -128,11 +157,52 @@ export const DEFAULT_GENES: Genes = deepFreeze({
   protectAllies: 0.5,
   aggression: 0.5,
   exploreCoverage: 0.65,
+  lootHp: 0.5,
+  lootAc: 0.5,
+  lootToHit: 0.5,
+  lootDamage: 0.5,
+  lootSpeed: 0.5,
   levelUpOrder: [],
 })
 
-// Per-class starting knowledge (ported from the legacy strategies/*.json).
-const BASELINES: Record<ClassKey, Partial<Genes>> = {
+/** v1 genes: the v2 set without the loot genes. */
+export type GenesV1 = Omit<Genes, LootGene>
+
+const V1_DEFAULTS: GenesV1 = { ...DEFAULT_GENES, kite: 0.5, levelUpOrder: [] }
+
+/**
+ * v1 → v2: copy every gene, add the loot genes at 0.5 (= the v1 heuristic),
+ * and turn the v1 threshold stance into the v2 probability: a v1 genome that
+ * kept range (clamp(kite − 0.4·aggression − 0.3·protect) ≥ 0.5) gets kite 1,
+ * otherwise 0 — exact for the default role genes, close otherwise.
+ */
+export function migrateGenesV1(v1: GenesV1): Genes {
+  const v1Stance = Math.max(0, Math.min(1, v1.kite - v1.aggression * 0.4 - v1.protectAllies * 0.3))
+  return {
+    ...v1,
+    kite: v1Stance >= 0.5 ? 1 : 0,
+    lootHp: 0.5,
+    lootAc: 0.5,
+    lootToHit: 0.5,
+    lootDamage: 0.5,
+    lootSpeed: 0.5,
+    levelUpOrder: [...v1.levelUpOrder],
+  }
+}
+
+/** Artifact/trinket scoring weights encoded by the loot genes. */
+export function lootWeights(g: Genes): LootWeights {
+  return {
+    maxHp: (g.lootHp / 0.5) * DEFAULT_LOOT_WEIGHTS.maxHp,
+    ac: (g.lootAc / 0.5) * DEFAULT_LOOT_WEIGHTS.ac,
+    toHit: (g.lootToHit / 0.5) * DEFAULT_LOOT_WEIGHTS.toHit,
+    damageBonus: (g.lootDamage / 0.5) * DEFAULT_LOOT_WEIGHTS.damageBonus,
+    speed: (g.lootSpeed / 0.5) * DEFAULT_LOOT_WEIGHTS.speed,
+  }
+}
+
+// Per-class starting knowledge (the legacy strategies/*.json, in v1 terms).
+const BASELINES: Record<ClassKey, Partial<GenesV1>> = {
   barbarian: { kite: 0.05, openWithRage: true, healAtHpFrac: 0.3, retreatAtHpFrac: 0.1, focusWeakest: true },
   bard: { kite: 0.55, inspireBeforeAttack: true, healAtHpFrac: 0.45 },
   cleric: { kite: 0.55, healAtHpFrac: 0.5, potionFirst: false },
@@ -151,9 +221,9 @@ function copyGenes(g: Genes): Genes {
   return { ...g, levelUpOrder: [...g.levelUpOrder] }
 }
 
-/** The bundled starting genome for a class. */
+/** The bundled starting genome for a class (its v1 baseline, migrated). */
 export function baselineGenome(classKey: ClassKey): Genome {
-  return makeGenome(classKey, { ...copyGenes(DEFAULT_GENES), ...BASELINES[classKey] })
+  return makeGenome(classKey, migrateGenesV1({ ...V1_DEFAULTS, ...BASELINES[classKey] }))
 }
 
 /** Wrap genes into a genome (genes are clamped). */
@@ -201,18 +271,20 @@ export function validateGenome(value: unknown): GenomeParseResult {
   if (!isPlainObject(value)) return { ok: false, errors: ['genome: expected an object'] }
   checkKeys(value, ['schema', 'version', 'classKey', 'genes'], 'genome', errors)
   if (value.schema !== GENOME_SCHEMA) errors.push(`genome.schema: expected "${GENOME_SCHEMA}"`)
-  if (value.version !== GENOME_VERSION) errors.push(`genome.version: expected ${GENOME_VERSION}`)
+  const version = value.version === 1 || value.version === 2 ? value.version : null
+  if (version === null) errors.push('genome.version: expected 1 or 2')
+  const fields = version === 1 ? GENE_ORDER_V1 : GENE_ORDER
   if (typeof value.classKey !== 'string' || !isClassKey(value.classKey)) errors.push(`genome.classKey: expected one of ${CLASS_KEYS.join(', ')}`)
   const genes = value.genes
   if (!isPlainObject(genes)) {
     errors.push('genome.genes: expected an object')
     return { ok: false, errors }
   }
-  checkKeys(genes, GENE_ORDER, 'genome.genes', errors)
+  checkKeys(genes, fields, 'genome.genes', errors)
   // Read every field exactly once and validate/return those copies, so an
   // accessor or a later mutation of the input cannot change what was checked.
   const read: Record<string, unknown> = {}
-  for (const k of GENE_ORDER) if (Object.prototype.hasOwnProperty.call(genes, k)) read[k] = genes[k]
+  for (const k of fields) if (Object.prototype.hasOwnProperty.call(genes, k)) read[k] = genes[k]
   for (const [k, spec] of Object.entries(NUMERIC_GENES) as [NumericGene, NumericSpec][]) {
     if (!(k in read)) continue
     const v = read[k]
@@ -239,7 +311,8 @@ export function validateGenome(value: unknown): GenomeParseResult {
     }
   }
   if (errors.length > 0) return { ok: false, errors }
-  const out = { ...read, levelUpOrder: order } as unknown as Genes
+  const validated = { ...read, levelUpOrder: order }
+  const out = version === 1 ? migrateGenesV1(validated as unknown as GenesV1) : (validated as unknown as Genes)
   return {
     ok: true,
     genome: { schema: GENOME_SCHEMA, version: GENOME_VERSION, classKey: value.classKey as ClassKey, genes: out },
@@ -292,7 +365,7 @@ export function relevantGenes(genome: Genome, ctx: RelevanceContext = { party: f
   const classes = new Set<ClassKey>([genome.classKey, ...genome.genes.levelUpOrder])
   const has = (k: ClassKey): boolean => classes.has(k)
   const any = (ks: readonly ClassKey[]): boolean => ks.some(has)
-  const out: GeneKey[] = ['healAtHpFrac', 'retreatAtHpFrac', 'kite', 'focusWeakest', 'focusCasters', 'protectAllies', 'aggression', 'exploreCoverage', 'levelUpOrder']
+  const out: GeneKey[] = ['healAtHpFrac', 'retreatAtHpFrac', 'kite', 'focusWeakest', 'focusCasters', 'protectAllies', 'aggression', 'exploreCoverage', ...LOOT_GENES, 'levelUpOrder']
   if (has('fighter')) out.push('secondWindAtHpFrac', 'actionSurgeEarly')
   if (has('monk')) out.push('patientDefenseAdj')
   if (has('barbarian')) out.push('openWithRage')
@@ -390,6 +463,7 @@ const pct = (v: number): string => `${Math.round(v * 100)}%`
 /** Readable rule lines for a genome card. */
 export function describeGenes(g: Genes): string[] {
   const stance = g.kite > 0.6 ? 'keeps range (kites)' : g.kite < 0.35 ? 'charges into melee' : 'mixed range'
+  const loot = `Loot: HP ${pct(g.lootHp)} · AC ${pct(g.lootAc)} · to-hit ${pct(g.lootToHit)} · damage ${pct(g.lootDamage)} · speed ${pct(g.lootSpeed)}`
   const order = g.levelUpOrder.length > 0 ? g.levelUpOrder.map((k) => k.charAt(0).toUpperCase()).join('·') : '—'
   return [
     `Role lean: ${roleOf(g)} (heal-allies ${pct(g.healAllies)} · protect ${pct(g.protectAllies)} · aggression ${pct(g.aggression)})`,
@@ -399,6 +473,7 @@ export function describeGenes(g: Genes): string[] {
     `Abilities: ${g.openWithRage ? 'rage ' : ''}${g.inspireBeforeAttack ? 'inspire-first ' : ''}${g.actionSurgeEarly ? 'surge-early ' : ''}dodge@${g.patientDefenseAdj}+`,
     `Targets casters ${pct(g.focusCasters)} · slot reserve ${pct(g.slotReserve)} · regroup ${pct(g.regroup)}`,
     `Explores ${pct(g.exploreCoverage)} of each level`,
+    loot,
     `Level-up order: ${order}`,
   ]
 }

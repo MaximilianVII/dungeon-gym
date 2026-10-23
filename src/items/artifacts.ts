@@ -66,12 +66,24 @@ export function drawRewards(rng: Rng, levelIndex: number, owned: readonly string
   return picks
 }
 
-/** Fixed survival-first scoring of a flat effect (artifacts and trinkets). */
-export function effectScore(e: ArtifactEffect): number {
-  return (e.maxHp ?? 0) + (e.ac ?? 0) * 6 + (e.toHit ?? 0) * 2 + (e.damageBonus ?? 0) * 2 + (e.speed ?? 0) * 0.2
+/** Per-stat weights for scoring a flat effect (a genome sets them; see lootWeights). */
+export type LootWeights = Required<ArtifactEffect>
+
+/** The legacy fixed survival-first heuristic (= loot genes at 0.5). */
+export const DEFAULT_LOOT_WEIGHTS: LootWeights = deepFreeze({ maxHp: 1, ac: 6, toHit: 2, damageBonus: 2, speed: 0.2 })
+
+/** Score a flat effect (artifacts and trinkets) under some weights. */
+export function effectScore(e: ArtifactEffect, w: LootWeights = DEFAULT_LOOT_WEIGHTS): number {
+  return (e.maxHp ?? 0) * w.maxHp + (e.ac ?? 0) * w.ac + (e.toHit ?? 0) * w.toHit + (e.damageBonus ?? 0) * w.damageBonus + (e.speed ?? 0) * w.speed
 }
 
-/** The score a bot uses to pick one artifact. */
-export function artifactScore(a: Artifact): number {
-  return effectScore(a.effect)
+export function artifactScore(a: Artifact, w: LootWeights = DEFAULT_LOOT_WEIGHTS): number {
+  return effectScore(a.effect, w)
+}
+
+/** The best-scoring choice (the first one on a tie). `choices` must be non-empty. */
+export function pickArtifact(choices: readonly Artifact[], w: LootWeights): Artifact {
+  let best = choices[0]
+  for (const a of choices) if (artifactScore(a, w) > artifactScore(best, w)) best = a
+  return best
 }

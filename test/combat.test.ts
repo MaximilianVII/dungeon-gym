@@ -271,7 +271,7 @@ describe('conditions', () => {
     const restrained = mkBattler({ conditions: ['restrained'] })
     expect(combatMode(plain, restrained, melee)).toBe('advantage')
     expect(combatMode(frightened, restrained, melee)).toBe('normal')
-    expect(combatMode(mkBattler({ conditions: ['inspired'] }), plain, melee)).toBe('advantage')
+    expect(combatMode(mkBattler({ conditions: ['inspired'] }), plain, melee)).toBe('normal') // the die is added on a miss instead
     expect(combatMode(plain, mkBattler({ conditions: ['dodging'] }), melee)).toBe('disadvantage')
     expect(combatMode(plain, mkBattler({ conditions: ['prone'] }), melee)).toBe('advantage')
     expect(combatMode(plain, mkBattler({ conditions: ['prone'] }), bow)).toBe('disadvantage')

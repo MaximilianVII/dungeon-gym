@@ -18,10 +18,10 @@ function withGene(g: Genome, key: string, value: unknown): Record<string, unknow
 }
 
 describe('genome schema', () => {
-  it('every class baseline is a valid v1 genome that round-trips through JSON', () => {
+  it('every class baseline is a valid v2 genome that round-trips through JSON', () => {
     for (const cls of CLASS_KEYS) {
       const g = baselineGenome(cls)
-      expect(g).toMatchObject({ schema: 'dungeon-gym/genome', version: 1, classKey: cls })
+      expect(g).toMatchObject({ schema: 'dungeon-gym/genome', version: 2, classKey: cls })
       const text = serializeGenome(g)
       const back = parseGenome(text)
       expect(back.ok).toBe(true)
@@ -52,7 +52,7 @@ describe('genome schema', () => {
     expect(bad(null)).toEqual(['genome: expected an object'])
     expect(bad([])).toEqual(['genome: expected an object'])
     expect(bad({ ...raw(g), schema: 'other' }).join()).toMatch(/schema/)
-    expect(bad({ ...raw(g), version: 2 }).join()).toMatch(/version/)
+    expect(bad({ ...raw(g), version: 3 }).join()).toMatch(/version/)
     expect(bad({ ...raw(g), classKey: 'starfarer' }).join()).toMatch(/classKey/)
     expect(bad({ ...raw(g), extra: 1 }).join()).toMatch(/unknown field "extra"/)
     expect(bad({ ...raw(g), genes: 5 }).join()).toMatch(/genes: expected an object/)
