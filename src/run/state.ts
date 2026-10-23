@@ -6,6 +6,16 @@ import type { EndReason, DeathCause, MemberState, CombatState, RunState } from '
 // Small accessors and terminal transitions over a RunState.
 // ---------------------------------------------------------------------------
 
+/** Is the run waiting for a human decision (a combat turn, or an exploration
+ *  step of a human-led party)? Stepping does nothing until it gets one. */
+export function isAwaitingInput(s: RunState): boolean {
+  if (s.phase === 'combat') return !!s.combat?.humanTurn
+  if (s.phase !== 'explore' || !s.level) return false
+  const leader = aliveMembers(s)[0]
+  const atExit = s.pos.x === s.level.map.waypoint.x && s.pos.y === s.level.map.waypoint.y
+  return leader?.control === 'human' && !atExit
+}
+
 export function aliveMembers(s: RunState): MemberState[] {
   return s.members.filter((m) => m.alive)
 }

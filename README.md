@@ -87,6 +87,49 @@ Word as a bonus action), `protectAllies` (go for foes on a badly hurt
 party-mate), `aggression` (stance and retreat), and Bardic Inspiration (the
 die rescues a missed attack or a failed save).
 
+### Play by hand
+
+A human can play any party member on the same deterministic engine: create
+the member with `control: 'human'` (its genome still picks loot and
+level-ups). The functions below are pure — they return a new state and never
+touch their input — and the state stays plain JSON with the RNG inside, so a
+browser client can save, send or replay a game; the same state and action
+always give the same next state.
+
+```ts
+import { createRun, baselineGenome, advanceToInput, pendingInput, legalActions, applyPlayerAction, isRunDone, runResult } from 'dungeon-gym-core'
+
+let s = advanceToInput(createRun({ seed: 42, depth: 5, party: [
+  { genome: baselineGenome('fighter'), control: 'human' },
+  { genome: baselineGenome('cleric') },                // a bot ally
+] }))
+while (!isRunDone(s)) {
+  const input = pendingInput(s)       // { kind: 'explore' | 'combat', memberId, turn? }
+  const options = legalActions(s)     // every legal PlayerAction right now
+  s = applyPlayerAction(s, pick(input, options))   // bots and monsters play on to the next decision
+}
+console.log(runResult(s))
+```
+
+- **Exploration** (when the party's leader — its first living member — is
+  human): `{ kind: 'move', to }` one tile, or `{ kind: 'auto' }` for one step
+  of the genome's own sweep. Traps, shrines, spotting and the exit work as for
+  bots.
+- **Combat** (each turn of a human member): build the turn from actions and
+  close it with `{ kind: 'end-turn' }` — `move` (one tile, within the speed
+  budget), `attack` (a weapon swing within the Attack action, Extra Attack
+  included; `bonus: true` for a Frenzy or Martial Arts swing; or a cantrip /
+  damage spell), `area` (an area spell at a `center`), `cast` (Hold Person
+  `targets`, Sleep / Hypnotic Pattern `center`, Conjure Animals, Hunter's Mark),
+  `heal` (Healing Word is a bonus action), `potion`, `feature` (`rage`,
+  `second-wind`, `action-surge`, `patient-defense`, `hide`, `dash`,
+  `wild-shape`, `inspire`), `wand`. `{ kind: 'auto' }` at the start of a turn
+  lets the genome play it — a run where the human always picks `auto` is
+  exactly the bot run.
+- `checkAction(s, action)` explains why an action is not legal;
+  `applyPlayerAction` throws on one. While input is pending, `stepRun` does
+  nothing and `runToEnd` returns.
+
 ## Train from the command line
 
 ```bash

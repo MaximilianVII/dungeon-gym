@@ -62,6 +62,24 @@ export interface PartyMemberInit {
   /** The character; defaults to the class's starting character. */
   spec?: CharacterSpec
   name?: string
+  /** Who decides this member's turns: its genome's bot (default) or a human
+   *  through play/manual (the genome still picks loot and level-ups). */
+  control?: 'bot' | 'human'
+}
+
+/** A human member's combat turn in progress (see play/manual). */
+export interface HumanTurn {
+  memberId: number
+  /** Tiles of movement left this turn. */
+  movementLeft: number
+  actionUsed: boolean
+  bonusUsed: boolean
+  /** Weapon swings left in an Attack action already started. */
+  attacksLeft: number
+  /** A bonus-action spell was cast: the action may only be a cantrip or a weapon attack. */
+  bonusSpell: boolean
+  /** Action Surge already used this turn. */
+  surged: boolean
 }
 
 export interface RunConfig {
@@ -84,6 +102,8 @@ export type GearSlot = 'mainHand' | 'offHand' | 'armor' | 'helmet' | 'legs' | 'b
 
 export interface MemberState {
   memberId: number
+  /** Present (= 'human') only for a human-controlled member. */
+  control?: 'human'
   name: string
   classKey: ClassKey
   genomeHash: string
@@ -153,6 +173,8 @@ export interface CombatState {
   surprised: boolean
   /** Spawn ids taking part in this fight. */
   engaged: number[]
+  /** Set while the run waits for a human member to finish its turn. */
+  humanTurn?: HumanTurn
 }
 
 export interface RunState {

@@ -5,6 +5,7 @@ import {
   createTrainer, trainGenerations, lastBest,
   benchmarkGenome, considerForHallOfFame, BENCHMARK, CORE_VERSION,
   baselineTeam, createPartyTrainer, trainPartyGenerations, lastBestTeam, benchmarkTeam, PARTY_BENCHMARK,
+  advanceToInput, pendingInput, legalActions, applyPlayerAction,
   type Benchmark,
 } from '../src/index'
 
@@ -41,5 +42,16 @@ describe('README usage', () => {
     party = trainPartyGenerations(party, 1)
     expect(lastBestTeam(party)?.generation).toBe(0)
     expect(benchmarkTeam(team, { ...PARTY_BENCHMARK, seeds: [1], depth: 1 }).benchmarkId).toContain(CORE_VERSION)
+  })
+
+  it('manual play works through src/index.ts', () => {
+    let s = advanceToInput(createRun({ seed: 42, depth: 1, party: [{ genome: baselineGenome('fighter'), control: 'human' }, { genome: baselineGenome('cleric') }] }))
+    for (let i = 0; i < 5000 && !isRunDone(s); i++) {
+      expect(pendingInput(s)).not.toBeNull()
+      const options = legalActions(s)
+      s = applyPlayerAction(s, options.find((a) => a.kind === 'auto') ?? options[0])
+    }
+    expect(isRunDone(s)).toBe(true)
+    expect(runResult(s).partySize).toBe(2)
   })
 })

@@ -7,7 +7,7 @@ import { deriveSeed, rngOf, seedRng } from '../rng'
 import { genomeHash, validateGenome } from './genome'
 import { RUN_STATE_SCHEMA, RUN_STATE_VERSION, STEPS_PER_LEVEL, MAX_DEPTH, type RunConfig, type MemberState, type RunState, type MemberResult, type RunResult, type RunSnapshot } from '../run/types'
 import { deriveBattler } from '../run/members'
-import { finishRun } from '../run/state'
+import { finishRun, isAwaitingInput } from '../run/state'
 import { combatStep } from '../run/combat'
 import { exploreStep } from '../run/explore'
 
@@ -41,6 +41,7 @@ export function createRun(config: RunConfig): RunState {
   if (!Number.isInteger(depth) || depth < 1 || depth > MAX_DEPTH) throw new Error(`createRun: depth must be an integer 1–${MAX_DEPTH}`)
   const seed = config.seed >>> 0
   const members: MemberState[] = config.party.map((p, i) => {
+    if (p.control !== undefined && p.control !== 'bot' && p.control !== 'human') throw new Error(`createRun: member ${i} control must be 'bot' or 'human'`)
     const checked = validateGenome(p.genome)
     if (!checked.ok) throw new Error(`createRun: invalid genome for member ${i}: ${checked.errors.join('; ')}`)
     const genome = checked.genome
@@ -71,6 +72,7 @@ export function createRun(config: RunConfig): RunState {
       kills: 0,
       stats: { turns: 0, idleTurns: 0, retreatTurns: 0, fights: 0, foesFaced: 0, maxFoes: 0, surprisedTurns: 0, slotsSpent: 0, potionsUsed: 0, damageTaken: 0 },
     }
+    if (p.control === 'human') m.control = 'human'
     m.battler = deriveBattler(m, null, true)
     return m
   })
@@ -113,9 +115,10 @@ export function isRunDone(s: RunState): boolean {
   return s.phase === 'done'
 }
 
-/** Advance the run by one unit (an exploration step or one combat turn). Mutates `s`. */
+/** Advance the run by one unit (an exploration step or one combat turn).
+ *  Mutates `s`. Does nothing while the run waits for a human (play/manual). */
 export function stepRun(s: RunState): void {
-  if (s.phase === 'done') return
+  if (s.phase === 'done' || isAwaitingInput(s)) return
   if (s.steps >= s.maxSteps) {
     finishRun(s, false, 'step-cap')
     return
@@ -127,8 +130,10 @@ export function stepRun(s: RunState): void {
 }
 
 /** Step until done (or `maxSteps` more steps) and return the result. */
+/** Step until done, until a human decision is needed (play/manual), or for
+ *  `maxSteps` more steps; return the result so far. */
 export function runToEnd(s: RunState, maxSteps: number = Infinity): RunResult {
-  for (let i = 0; i < maxSteps && s.phase !== 'done'; i++) stepRun(s)
+  for (let i = 0; i < maxSteps && s.phase !== 'done' && !isAwaitingInput(s); i++) stepRun(s)
   return runResult(s)
 }
 

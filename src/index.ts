@@ -21,6 +21,13 @@ export {
   type RunConfig, type RunState, type RunResult, type MemberResult, type RunSnapshot, type PartyMemberInit, type EndReason, type RunPhase, type DeathCause, type GearSlot,
 } from './bot/run'
 export { botPlayerTurn, type TurnKind, type TurnContext } from './bot/policy'
+
+// Manual play: a human controls members created with control: 'human'
+export {
+  pendingInput, legalActions, checkAction, applyPlayerAction, advanceToInput,
+  type PlayerAction, type PendingInput, type FeatureKey,
+} from './play/manual'
+export type { HumanTurn } from './run/types'
 export { planControl, incomingDamage, type ControlPlan, type ControlOptions } from './bot/tactics'
 export { maxResources, restoreResources, rageUses, bardicDie, type ClassResources } from './combat/abilities'
 export { DEFAULT_REWARD, BENCHMARK_REWARD, REWARD_PRESETS, clampReward, memberFitness, diversityBonus, type RewardConfig, type FitnessInput } from './bot/reward'

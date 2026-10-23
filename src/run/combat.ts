@@ -6,12 +6,12 @@ import { getMonster } from '../combat/monsters'
 import { resolveAttack, combatMode, tickConditions, rollDeathSave, endWildShape } from '../combat/resolve'
 import { planEnemyTurn } from '../combat/ai'
 import { bossTurn } from '../combat/boss'
-import { isOutOfFight, removeCondition, type Battler } from '../combat/types'
+import { hasCondition, isOutOfFight, removeCondition, type Battler } from '../combat/types'
 import { endOfTurnSaves, enforceConcentration, isIncapacitated } from '../combat/control'
 import { applyXp, monsterXp } from '../dungeon/leveling'
 import { abilityMod } from '../character/build'
 import { botPlayerTurn, type TurnContext } from '../bot/policy'
-import { ENGAGE_RADIUS, COMBAT_ROUND_CAP, BOT_WAND, type Spawn, type CombatState, type RunState } from './types'
+import { ENGAGE_RADIUS, COMBAT_ROUND_CAP, BOT_WAND, type Spawn, type CombatState, type MemberState, type RunState } from './types'
 import { aliveMembers, memberById, currentLevel, combatBattlers, killMember, finishRun } from './state'
 import { spreadPositions } from './grid'
 import { shortRestAfterFight, levelUp } from './members'
@@ -237,6 +237,18 @@ export function syncDeaths(s: RunState, c: CombatState): void {
   }
 }
 
+/** Close a human member's turn: end-of-turn saves, then the next battler. */
+export function endHumanTurn(s: RunState, c: CombatState, rng: Rng): void {
+  const turn = c.humanTurn
+  if (!turn) return
+  const member = memberById(s, turn.memberId)
+  member.stats.turns++
+  endOfTurnSaves(rng, member.battler)
+  member.battler.frenzyAttackPending = false
+  delete c.humanTurn
+  gotoNext(c)
+}
+
 export function combatStep(s: RunState, c: CombatState, rng: Rng, decide: Rng): void {
   syncDeaths(s, c)
   const battlers = combatBattlers(s, c)
@@ -290,6 +302,20 @@ export function combatStep(s: RunState, c: CombatState, rng: Rng, decide: Rng): 
     gotoNext(c)
     return
   }
+  if (member.control === 'human') {
+    // Wait for the human: play/manual applies the turn and calls endHumanTurn.
+    actor.sneakAttackUsed = false
+    actor.colossusSlayerUsed = false
+    const stuck = hasCondition(actor, 'restrained') || hasCondition(actor, 'grappled')
+    c.humanTurn = { memberId: member.memberId, movementLeft: stuck ? 0 : actor.speedTiles, actionUsed: false, bonusUsed: false, attacksLeft: 0, bonusSpell: false, surged: false }
+    return
+  }
+  botMemberTurn(s, c, actor, member, battlers, rng, decide)
+}
+
+/** A member's turn played by its genome's bot: the cast-wand bonus action,
+ *  the bot policy, telemetry, end-of-turn saves; then the next battler. */
+export function botMemberTurn(s: RunState, c: CombatState, actor: Battler, member: MemberState, battlers: Battler[], rng: Rng, decide: Rng): void {
   // Bonus-action item: fire a held cast-wand at the weakest foe.
   if (s.castCharges > 0) {
     const foes = battlers.filter((b) => b.team === 'enemy' && b.hp > 0)

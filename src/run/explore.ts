@@ -7,7 +7,7 @@ import { getMonster } from '../combat/monsters'
 import { generateLevelForRun } from '../dungeon/generate'
 import { TRAP_DAMAGE, SHRINE_FRAC, LONG_REST_EVERY, VISION_RADIUS, type Spawn, type RunState } from './types'
 import { DIRS, bfsNextStep, reachableFrom } from './grid'
-import { aliveMembers, killMember, finishRun } from './state'
+import { aliveMembers, currentLevel, killMember, finishRun } from './state'
 import { restParty, grantReward } from './members'
 import { startCombat } from './combat'
 
@@ -132,6 +132,13 @@ export function exploreStep(s: RunState, rng: Rng): void {
     finishRun(s, false, 'stuck')
     return
   }
+  walkTo(s, next, rng)
+}
+
+/** Move the party one step to `next` (adjacent, walkable) and resolve what is
+ *  there: vision, a trap, a shrine, foes that spot the party. */
+export function walkTo(s: RunState, next: Vec2, rng: Rng): void {
+  const map = currentLevel(s).map
   s.pos = next
   s.exploreSteps++
   for (const m of aliveMembers(s)) m.battler.pos = { ...next }
