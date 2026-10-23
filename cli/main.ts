@@ -8,13 +8,14 @@ import { CLASS_KEYS, isClassKey } from '../src/character/build'
 import { BENCHMARK, mean } from '../src/train/evaluate'
 import { createTrainer, lastBest, type TrainerState } from '../src/train/trainer'
 import { CORE_VERSION } from '../src/version'
+import { deriveSeed } from '../src/rng'
 import { createInlineEvaluator, createWorkerPool, trainWith, type EvalUnit, type Evaluator } from './pool'
 
 // ---------------------------------------------------------------------------
 // dungeon-gym CLI:
 //   train --class wizard [--generations 20] [--workers K] [--seed 1] [--out genome.json]
 //         [--population 8] [--seeds 6] [--depth 10] [--reward benchmark|default]
-//         [--init genome.json] [--curve curve.csv] [--state trainer.json]
+//         [--init genome.json] [--curve curve.csv] [--state trainer.json] [--validate-seeds 32]
 //   bench <genome.json> [--workers K]
 //   validate <genome.json>
 //   speed [--workers K] [--runs 200]
@@ -77,7 +78,7 @@ async function train(args: Args): Promise<void> {
     classKey,
     seed: num(args, 'seed', 1),
     populationSize: num(args, 'population', 8),
-    seedsPerGeneration: num(args, 'seeds', 6),
+    seedsPerGeneration: num(args, 'seeds', 12),
     depth: num(args, 'depth', BENCHMARK.depth),
     reward: str(args, 'reward') === 'default' ? DEFAULT_REWARD : BENCHMARK_REWARD,
   }, init ? [readGenome(init)] : [])
@@ -85,19 +86,40 @@ async function train(args: Args): Promise<void> {
   const curve = ['generation,best_mean,population_mean']
   const t0 = performance.now()
   let runs = 0
+  // Each generation's best, kept for hold-out selection (a generation's best is
+  // picked on few, noisy seeds; re-scoring on fresh seeds removes that bias).
+  const candidates = new Map<string, Genome>()
+  let genome: Genome
+  let validationMean = 0
   try {
     state = await trainWith(state, generations, evaluator, (s) => {
       const h = lastBest(s)!
+      const g = s.population.find((i) => i.id === h.bestId)?.genome
+      if (g) candidates.set(genomeHash(g), g)
       runs += s.config.populationSize * s.config.seedsPerGeneration
       curve.push(`${h.generation},${h.bestMean.toFixed(3)},${h.populationMean.toFixed(3)}`)
       const rate = runs / ((performance.now() - t0) / 1000)
       log(`gen ${String(h.generation).padStart(3)}  best ${h.bestMean.toFixed(1).padStart(6)}  mean ${h.populationMean.toFixed(1).padStart(6)}  (${rate.toFixed(0)} runs/s)`)
     })
+    // Hold-out validation on seeds derived from the trainer seed (never the
+    // benchmark seeds), so the pick is not tuned to the official score.
+    const vSeeds = Array.from({ length: num(args, 'validate-seeds', 32) }, (_, i) => deriveSeed(state.config.seed, `validation:${i}`))
+    const list = [...candidates.values()]
+    const units = list.flatMap((g) => vSeeds.map((seed) => ({ genome: g, seed, depth: state.config.depth, reward: state.config.reward })))
+    const results = await evaluator.evaluate(units)
+    genome = list[0]
+    validationMean = -Infinity
+    list.forEach((g, i) => {
+      const m = mean(results.slice(i * vSeeds.length, (i + 1) * vSeeds.length).map((r) => r.score))
+      if (m >= validationMean) {
+        validationMean = m
+        genome = g
+      }
+    })
   } finally {
     await evaluator.close()
   }
-  const best = lastBest(state)
-  const genome = state.population.find((i) => i.id === best?.bestId)?.genome ?? state.population[0].genome
+  log(`selected on ${candidates.size} candidates, validation mean ${validationMean.toFixed(1)}`)
   const out = str(args, 'out') ?? `${classKey}.genome.json`
   writeFileSync(out, serializeGenome(genome) + '\n')
   const curveFile = str(args, 'curve')

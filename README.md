@@ -63,6 +63,29 @@ For distributed training, use `pendingTasks` → `evaluateTask` (anywhere, e.g. 
 worker) → `submitScores` → `advanceGeneration`; late or duplicate results are
 rejected, never mis-credited.
 
+## Train from the command line
+
+```bash
+npm run build
+```
+
+```bash
+node dist/cli.mjs train --class wizard --generations 30 --workers 8 --seed 1 --out wizard.json --curve wizard.csv
+```
+
+```bash
+node dist/cli.mjs bench wizard.json
+```
+
+```bash
+node dist/cli.mjs validate wizard.json
+```
+
+`train` runs on `worker_threads`; its result depends only on its options, never
+on `--workers`. `bench` without a file scores the 12 baseline genomes, `speed`
+measures runs per second and `report` prints the balance telemetry
+(see `docs/balance.md`, `docs/performance.md`).
+
 ## Layout
 
 | Path | What |
