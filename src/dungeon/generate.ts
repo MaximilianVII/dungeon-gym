@@ -1,6 +1,6 @@
 import { Tile, type GameMap, type Vec2 } from '../game/types'
 import { BIOMES, BIOME_NAMES } from '../game/biomes'
-import { bossForBiome } from '../combat/monsters'
+import { bossForBiome, getMonster } from '../combat/monsters'
 import { makeRng } from '../rng'
 import type { EnemySpawn, Level } from './levels'
 
@@ -16,8 +16,8 @@ import type { EnemySpawn, Level } from './levels'
 //      L-shaped corridors so every room is reachable. A couple of extra links
 //      add loops so the layout is not a single line.
 //   4. Spawn = first room's centre; exit waypoint = the farthest room's centre.
-//   5. Place enemies (in rooms past the first), traps (on the travelled floor),
-//      cover pillars and healing shrines.
+//   5. Place enemy groups (in rooms past the first), traps (on the travelled
+//      floor), cover pillars and healing shrines.
 // Everything is driven by a seeded RNG so a given seed always yields the same
 // dungeon — essential for server-side re-scoring and for unit tests.
 // ---------------------------------------------------------------------------
@@ -128,6 +128,19 @@ const MONSTER_POOLS: string[][] = [
   ['wight', 'ogre', 'troll', 'bugbear'],
   ['troll', 'wraith', 'hill-giant'],
 ]
+
+/** Largest pack a monster comes in: small fry in threes, CR 1-ish foes in
+ *  pairs, the big ones alone (before the party-size bonus). */
+function packMax(key: string): number {
+  const hp = getMonster(key)?.maxHp ?? 99
+  return hp <= 15 ? 3 : hp <= 30 ? 2 : 1
+}
+
+/** Leaders of different groups stay this far apart (Chebyshev), so two groups
+ *  are not met as one fight. */
+const GROUP_GAP = 7
+/** Followers stand within this many tiles of their leader. */
+const PACK_RADIUS = 2
 
 export interface GenerateOptions {
   /** Multiplies the enemy count (party size). Defaults to 1. */
@@ -259,10 +272,11 @@ export function generateLevel(seed: number, id: string, name: string, levelIndex
     for (const p of pillars) tiles[p.y][p.x] = Tile.Floor
   }
 
-  // 5a. Enemies — drawn from the depth pool, scattered through the rooms past
-  // the first. The final level fields fewer minions but adds a boss.
-  // A boss level's minions come from three tiers lower: the boss is the threat.
-  // A boss level's minions come from three tiers lower: the boss is the threat.
+  // 5a. Enemies — ENCOUNTER GROUPS drawn from the depth pool, placed in the
+  // rooms past the first: a leader plus up to packMax − 1 followers (mostly its
+  // own kind) clustered around it, so fights have several foes and AoE /
+  // control spells matter. The final level fields fewer minions but adds a
+  // boss; a boss level's minions come from three tiers lower.
   const pool = MONSTER_POOLS[Math.min(isLast ? Math.max(0, levelIndex - 3) : levelIndex, MONSTER_POOLS.length - 1)]
   // Balance v2: the non-last enemy count now scales with the ROOM count (rooms
   // already grow with the map), aiming for roughly ONE foe per ~3-4 rooms — so a
@@ -270,8 +284,8 @@ export function generateLevel(seed: number, id: string, name: string, levelIndex
   // SPREAD (the ENEMY_GAP spacing below keeps them apart, not dogpiled on one
   // cluster). Floor 1 (~9 rooms) lands ~2-3; depth-25 (~47 rooms) lands ~12-14,
   // capped at 18. The last level keeps a small fixed minion count alongside its
-  // biome boss. Party play multiplies the body count by the group size (×1 solo
-  // = unchanged, so the generator unit tests stay intact).
+  // biome boss. Party play multiplies the body count by the party size and
+  // lets each pack grow by one per extra member.
   const scale = Math.max(1, Math.round(opts?.enemyScale ?? 1))
   const minions = isLast ? 2 : Math.min(18, Math.max(2, Math.round(rooms.length * 0.28)))
   const enemyCount = minions * scale
@@ -280,8 +294,8 @@ export function generateLevel(seed: number, id: string, name: string, levelIndex
   // Distance + spread: gather the far-from-spawn floor across the enemy rooms,
   // bias to the DEEPER half of the level (so you meet foes after a corridor — a
   // natural chokepoint — and a ranged caster gets a free shot or two while
-  // closing), then place them SPACED OUT so a solo caster is never dogpiled by
-  // the whole pack landing on one tile-cluster.
+  // closing), then place the group leaders SPACED OUT (GROUP_GAP) so packs
+  // stay separate fights.
   const enemyCandidates: Vec2[] = []
   for (const r of enemyRooms) enemyCandidates.push(...roomFloors(r, true))
   enemyCandidates.sort(
@@ -294,24 +308,43 @@ export function generateLevel(seed: number, id: string, name: string, levelIndex
     const j = Math.floor(rand() * (i + 1))
     ;[farPool[i], farPool[j]] = [farPool[j], farPool[i]]
   }
-  const ENEMY_GAP = 3
-  const placeEnemies = (cands: Vec2[], requireGap: boolean): void => {
+  const roomOf = (p: Vec2): Room | undefined => enemyRooms.find((r) => p.x >= r.x && p.x < r.x + r.w && p.y >= r.y && p.y < r.y + r.h)
+  const smallFry = pool.filter((k) => packMax(k) >= 2)
+  const leaders: Vec2[] = []
+  let group = 0
+  const placeGroups = (cands: Vec2[], gap: number): void => {
     for (const p of cands) {
       if (enemies.length >= enemyCount) break
       const k = `${p.x},${p.y}`
       if (taken.has(k)) continue
-      if (requireGap && enemies.some((e) => Math.max(Math.abs(e.pos.x - p.x), Math.abs(e.pos.y - p.y)) < ENEMY_GAP)) continue
+      if (leaders.some((l) => Math.max(Math.abs(l.x - p.x), Math.abs(l.y - p.y)) < gap)) continue
       taken.add(k)
-      enemies.push({ key: pool[ri(0, pool.length - 1)], pos: p })
+      leaders.push(p)
+      const key = pool[ri(0, pool.length - 1)]
+      enemies.push({ key, pos: p, group })
+      // Followers: free floor of the leader's room around it, nearest first.
+      const size = Math.min(enemyCount - enemies.length + 1, ri(1, packMax(key) + scale - 1))
+      const room = roomOf(p)
+      const spots = room
+        ? roomFloors(room, true)
+            .filter((q) => !taken.has(`${q.x},${q.y}`) && Math.max(Math.abs(q.x - p.x), Math.abs(q.y - p.y)) <= PACK_RADIUS)
+            .sort((a, b) => Math.max(Math.abs(a.x - p.x), Math.abs(a.y - p.y)) - Math.max(Math.abs(b.x - p.x), Math.abs(b.y - p.y)) || a.y - b.y || a.x - b.x)
+        : []
+      for (const q of spots.slice(0, size - 1)) {
+        taken.add(`${q.x},${q.y}`)
+        const mixed = rand() < 0.25 && smallFry.length > 0
+        enemies.push({ key: mixed ? smallFry[ri(0, smallFry.length - 1)] : key, pos: q, group })
+      }
+      group++
     }
   }
-  placeEnemies(farPool, true) // deep + spaced first
-  placeEnemies(enemyCandidates, true) // then anywhere far, still spaced
-  placeEnemies(enemyCandidates, false) // finally fill the count without the gap rule
+  placeGroups(farPool, GROUP_GAP) // deep + spaced first
+  placeGroups(enemyCandidates, GROUP_GAP) // then anywhere far, still spaced
+  placeGroups(enemyCandidates, 0) // finally fill the count without the gap rule
   // The deepest level is guarded by a boss, planted in the exit room.
   if (isLast) {
     const spot = pickFloor(roomFloors(exitRoom, false))
-    if (spot) enemies.unshift({ key: bossForBiome(biome), pos: spot })
+    if (spot) enemies.unshift({ key: bossForBiome(biome), pos: spot, group })
   }
 
   // 5b. Traps — on the travelled floor, away from the spawn.

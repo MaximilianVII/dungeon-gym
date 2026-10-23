@@ -156,7 +156,9 @@ export const DEFAULT_GENES: Genes = deepFreeze({
   healAllies: 0.5,
   protectAllies: 0.5,
   aggression: 0.5,
-  exploreCoverage: 0.65,
+  // 0.4 since encounter groups (0.4.0): sweeping most of a level costs more
+  // than its XP returns.
+  exploreCoverage: 0.4,
   lootHp: 0.5,
   lootAc: 0.5,
   lootToHit: 0.5,

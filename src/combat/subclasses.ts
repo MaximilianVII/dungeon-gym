@@ -19,6 +19,8 @@ export type SubclassEffect =
   | { kind: 'cuttingWords' /** Lore — once per fight, subtract 1d6 from a hit against you. */ }
   | { kind: 'openHandTechnique' /** Open Hand — melee hits may knock prone (simplified). */ }
   | { kind: 'colossusSlayer' /** Hunter — +1d8 once per turn on a weapon hit vs a wounded target. */ }
+  | { kind: 'darkOnesBlessing' /** Fiend — temp HP (CHA mod + warlock level) on dropping a hostile creature to 0 HP. */ }
+  | { kind: 'naturalRecovery' /** Land — once per long rest, a short rest recovers slots worth half the druid level. */ }
 
 export interface SubclassFeature {
   level: number
@@ -72,7 +74,7 @@ export const SUBCLASS_CATALOGUE: Subclass[] = deepFreeze([
     classKey: 'druid', key: 'land', name: 'Circle of the Land', chosenAtLevel: 2,
     features: [
       { level: 2, key: 'bonus_cantrip', name: 'Bonus Cantrip', description: 'Learn one extra druid cantrip.' },
-      { level: 2, key: 'natural_recovery', name: 'Natural Recovery', description: 'Recover some spell slots on a short rest.' },
+      { level: 2, key: 'natural_recovery', name: 'Natural Recovery', description: 'Recover some spell slots on a short rest.', effect: { kind: 'naturalRecovery' } },
       { level: 3, key: 'circle_spells', name: 'Circle Spells', description: 'Always-prepared spells tied to your land.' },
       { level: 6, key: 'lands_stride', name: 'Land’s Stride', description: 'Move through nonmagical difficult terrain freely.' },
       { level: 10, key: 'natures_ward', name: 'Nature’s Ward', description: 'Immune to poison and disease; elementals and fey cannot charm or frighten you.' },
@@ -139,7 +141,7 @@ export const SUBCLASS_CATALOGUE: Subclass[] = deepFreeze([
   {
     classKey: 'warlock', key: 'fiend', name: 'The Fiend', chosenAtLevel: 1,
     features: [
-      { level: 1, key: 'dark_ones_blessing', name: 'Dark One’s Blessing', description: 'Gain temporary HP when you drop a hostile creature to 0 HP.' },
+      { level: 1, key: 'dark_ones_blessing', name: 'Dark One’s Blessing', description: 'Gain temporary HP when you drop a hostile creature to 0 HP.', effect: { kind: 'darkOnesBlessing' } },
       { level: 6, key: 'dark_ones_own_luck', name: 'Dark One’s Own Luck', description: 'Bolster one save per rest (simplified: reroll one failed save per fight).', effect: { kind: 'darkOneLuck' } },
       { level: 10, key: 'fiendish_resilience', name: 'Fiendish Resilience', description: 'Resistance to a damage type of your choice.' },
       { level: 14, key: 'hurl_through_hell', name: 'Hurl Through Hell', description: 'Send a creature through the lower planes.' },

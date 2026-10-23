@@ -50,8 +50,10 @@ describe('the 12 starting characters', () => {
     expect(w.spells.some((s) => s.name === 'Ice Storm')).toBe(false)
     const warlock = starterCharacter('warlock')
     expect(warlock.spellSlots).toEqual([0, 0, 2])
-    expect(warlock.spells.map((s) => s.name)).toEqual(['Eldritch Blast', 'Shatter', 'Vampiric Touch'])
+    expect(warlock.spells.map((s) => s.name)).toEqual(['Eldritch Blast', 'Shatter', 'Hold Person', 'Hypnotic Pattern', 'Vampiric Touch'])
+    expect(warlock.spells[0].beams).toBe(2) // one attack roll per beam
     expect(warlock.spells[0].damage).toEqual({ count: 2, sides: 10, bonus: 4 }) // Agonizing Blast: +CHA per beam
+    expect(warlock.spells[0].push).toBe(4) // Repelling Blast: 10 ft per beam
     expect(warlock.ac).toBe(15) // Armor of Shadows
     const cleric = starterCharacter('cleric')
     expect(cleric.ac).toBe(18)
@@ -138,7 +140,7 @@ describe('spell catalogue', () => {
   it('grants class spells capped by slot level, with cantrip scaling', () => {
     expect(grantSpells('fighter', 5, 3, 0, 5)).toEqual([])
     const low = grantSpells('wizard', 5, 1, 3, 1)
-    expect(low.map((s) => s.name)).toEqual(['Fire Bolt', 'Ray of Frost', 'Burning Hands', 'Thunderwave', 'Magic Missile'])
+    expect(low.map((s) => s.name)).toEqual(['Fire Bolt', 'Ray of Frost', 'Burning Hands', 'Thunderwave', 'Magic Missile', 'Sleep'])
     expect(low[0].damage.count).toBe(1)
     expect(cantripDice(5)).toBe(2)
     expect(cantripDice(11)).toBe(3)

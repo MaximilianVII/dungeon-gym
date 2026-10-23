@@ -1,6 +1,7 @@
 import { rollD20, rollDamage, rollDie, type D20Mode, type Rng } from './dice'
-import type { Vec2 } from '../game/types'
-import { addCondition, hasCondition, removeCondition, type Ability, type Battler, type CombatAttack, type CombatEvent, type Condition } from './types'
+import type { GameMap, Vec2 } from '../game/types'
+import { isWalkable } from '../game/map'
+import { addCondition, hasCondition, makesDeathSaves, removeCondition, type Ability, type Battler, type CombatAttack, type CombatEvent, type Condition } from './types'
 import { effectsOf, findEffect } from './subclasses'
 import { VAMPIRIC_LIFESTEAL } from './affixes'
 import { bardicDie } from './abilities'
@@ -10,8 +11,9 @@ import { bardicDie } from './abilities'
 // Pure logic with an injected RNG. Functions MUTATE the battlers' hp /
 // deathSaves / conditions and return the events that happened.
 //
-// 5e-lite cuts: no reactions / opportunity attacks, no concentration.
-// Crit = double the damage dice (not the modifier).
+// 5e-lite cuts: no reactions / opportunity attacks. Concentration covers only
+// the spells with a lasting effect (combat/control); damage forces the SRD
+// Constitution save. Crit = double the damage dice (not the modifier).
 // ---------------------------------------------------------------------------
 
 /** Fraction of max HP a single hit can take from a player at full HP. */
@@ -22,13 +24,55 @@ export function rageDamageBonus(barbarianLevel: number): number {
   return barbarianLevel >= 16 ? 4 : barbarianLevel >= 9 ? 3 : 2
 }
 
-function setTimedCondition(target: Battler, condition: Condition, rounds: number): void {
+/** Add a condition that lasts `rounds` of the creature's turns. */
+export function setTimedCondition(target: Battler, condition: Condition, rounds: number): void {
   addCondition(target, condition)
   ;(target.condTimers ??= {})[condition] = rounds
 }
 
-/** Apply `amount` damage to a target, handling enemy death and player death saves. */
-export function applyDamage(target: Battler, amount: number, crit: boolean, events: CombatEvent[]): void {
+/**
+ * SRD concentration: a caster who takes damage makes a Constitution save
+ * (DC 10 or half the damage, whichever is higher) or loses the spell; a caster
+ * at 0 HP always loses it. Without an RNG only the 0-HP rule applies.
+ */
+function checkConcentration(target: Battler, damage: number, events: CombatEvent[], rng?: Rng): void {
+  if (!target.concentration || damage <= 0) return
+  const kept = target.hp > 0 && (!rng || savingThrow(rng, target, 'con') >= Math.max(10, Math.floor(damage / 2)))
+  if (kept) return
+  events.push({ kind: 'condition', who: target.name, condition: `lost concentration (${target.concentration})` })
+  delete target.concentration
+}
+
+/** Magical sleep and a hypnotic trance end when a conscious creature takes
+ *  damage — even damage its temporary HP or beast form absorbs. */
+function wakeUp(target: Battler): void {
+  if (target.hp <= 0) return
+  for (const c of ['unconscious', 'incapacitated'] as const) {
+    if (!hasCondition(target, c)) continue
+    removeCondition(target, c)
+    if (target.condTimers) delete target.condTimers[c]
+    if (target.condSource) delete target.condSource[c]
+    if (target.saveEnds) delete target.saveEnds[c]
+  }
+}
+
+/** Apply `amount` damage to a target, handling enemy death and player death
+ *  saves. Damage wakes a sleeper and may break the target's concentration
+ *  (pass `rng` for the Constitution save). */
+export function applyDamage(target: Battler, amount: number, crit: boolean, events: CombatEvent[], rng?: Rng): void {
+  // Temporary hit points go first.
+  if (target.tempHp && amount > 0) {
+    const absorbed = Math.min(amount, target.tempHp)
+    target.tempHp -= absorbed
+    amount -= absorbed
+    if (target.tempHp <= 0) delete target.tempHp
+    if (amount <= 0) {
+      events.push({ kind: 'damage', target: target.name, amount: 0, hpLeft: target.hp })
+      checkConcentration(target, absorbed, events, rng)
+      wakeUp(target)
+      return
+    }
+  }
   // Wild Shape: the beast form soaks damage first; at 0 HP the druid reverts
   // and any excess carries over (SRD).
   const ws = target.wildShape
@@ -39,22 +83,28 @@ export function applyDamage(target: Battler, amount: number, crit: boolean, even
     if (ws.hp <= 0) endWildShape(target)
     if (amount <= 0) {
       events.push({ kind: 'damage', target: target.name, amount: soaked, hpLeft: target.hp })
+      checkConcentration(target, soaked, events, rng)
+      wakeUp(target)
       return
     }
   }
   // Mercy rule (anti one-shot): a player at FULL HP can't lose more than 60 %
   // of max HP to a single hit. Only the first hit while at full is capped.
-  if (target.team === 'player' && target.hp >= target.maxHp && target.maxHp > 1) {
+  if (makesDeathSaves(target) && target.hp >= target.maxHp && target.maxHp > 1) {
     const cap = Math.max(1, Math.floor(target.maxHp * MERCY_CAP_FRAC))
     if (amount > cap) amount = cap
   }
   const wasDown = target.hp <= 0
   target.hp = Math.max(0, target.hp - amount)
   events.push({ kind: 'damage', target: target.name, amount, hpLeft: target.hp })
+  checkConcentration(target, amount, events, rng)
 
-  if (target.hp > 0) return
+  if (target.hp > 0) {
+    if (amount > 0) wakeUp(target)
+    return
+  }
 
-  if (target.team === 'enemy') {
+  if (!makesDeathSaves(target)) {
     events.push({ kind: 'dead', who: target.name })
     return
   }
@@ -97,11 +147,31 @@ export function endWildShape(b: Battler): void {
   delete b.wildShape
 }
 
+/** Paralyzed or unconscious: the creature can't act, attacks against it have
+ *  advantage and a melee hit from 5 ft is a critical hit (SRD). */
+export function isHelpless(b: Battler): boolean {
+  return hasCondition(b, 'paralyzed') || hasCondition(b, 'unconscious')
+}
+
 /** A saving throw: d20 + the creature's save bonus (DEX falls back to its
- *  initiative modifier, other abilities to +0). */
+ *  initiative modifier, other abilities to +0). A helpless creature fails
+ *  STR and DEX saves outright (no roll). */
 export function savingThrow(rng: Rng, b: Battler, ability: Ability): number {
+  if ((ability === 'str' || ability === 'dex') && isHelpless(b)) return -Infinity
   const bonus = b.saves?.[ability] ?? (ability === 'dex' ? b.initiativeMod : 0)
   return rollD20(rng).value + bonus
+}
+
+/** Grant temporary HP (they never stack: the higher value is kept). */
+export function grantTempHp(b: Battler, amount: number): void {
+  if (amount > (b.tempHp ?? 0)) b.tempHp = amount
+}
+
+/** Fiend — Dark One's Blessing: dropping a hostile creature to 0 HP grants
+ *  temporary HP equal to CHA modifier + warlock level (at least 1). */
+function onDrop(attacker: Battler, target: Battler, wasUp: boolean): void {
+  if (!wasUp || target.hp > 0 || target.team === attacker.team || !findEffect(attacker, 'darkOnesBlessing')) return
+  grantTempHp(attacker, Math.max(1, (attacker.abilityMods?.cha ?? 0) + (attacker.classLevels?.warlock ?? 0)))
 }
 
 /** Sneak Attack dice by rogue level (SRD: 1d6 per two levels, rounded up). */
@@ -110,9 +180,30 @@ export function sneakAttackDice(rogueLevel: number): number {
 }
 
 /**
+ * Push `target` up to `tiles` tiles straight away from `from` (one step per
+ * tile, the 8-way direction away); a wall or another creature stops it.
+ * Returns the tiles moved.
+ */
+export function pushAway(target: Battler, from: Vec2, tiles: number, map: GameMap, battlers: readonly Battler[]): number {
+  const dx = Math.sign(target.pos.x - from.x)
+  const dy = Math.sign(target.pos.y - from.y)
+  if (dx === 0 && dy === 0) return 0
+  let moved = 0
+  for (let i = 0; i < tiles; i++) {
+    const nx = target.pos.x + dx
+    const ny = target.pos.y + dy
+    if (!isWalkable(map, nx, ny)) break
+    if (battlers.some((b) => b !== target && b.hp > 0 && b.pos.x === nx && b.pos.y === ny)) break
+    target.pos = { x: nx, y: ny }
+    moved++
+  }
+  return moved
+}
+
+/**
  * Resolve one attack from `attacker` against `target`. Returns the events.
  * `battlers` (optional) lets Sneak Attack see whether an ally of the attacker
- * stands next to the target.
+ * stands next to the target and blocks a push; `map` enables pushes.
  */
 export function resolveAttack(
   rng: Rng,
@@ -121,6 +212,33 @@ export function resolveAttack(
   target: Battler,
   mode: D20Mode = 'normal',
   battlers: readonly Battler[] = [],
+  map?: GameMap,
+): CombatEvent[] {
+  const beams = attack.beams ?? 1
+  if (beams > 1) {
+    // Each ray/beam is its own attack for an equal share (they stop once the
+    // target drops — simplification: no retargeting).
+    const share = (n: number): number => Math.round(n / beams)
+    const one: CombatAttack = { ...attack, beams: 1, damage: { ...attack.damage, count: Math.max(1, share(attack.damage.count)), bonus: share(attack.damage.bonus) } }
+    if (attack.push) one.push = share(attack.push)
+    const events: CombatEvent[] = []
+    for (let i = 0; i < beams && target.hp > 0; i++) events.push(...resolveAttack(rng, attacker, one, target, mode, battlers, map))
+    return events
+  }
+  const wasUp = target.hp > 0
+  const events = attackOnce(rng, attacker, attack, target, mode, battlers, map)
+  onDrop(attacker, target, wasUp)
+  return events
+}
+
+function attackOnce(
+  rng: Rng,
+  attacker: Battler,
+  attack: CombatAttack,
+  target: Battler,
+  mode: D20Mode,
+  battlers: readonly Battler[],
+  map: GameMap | undefined,
 ): CombatEvent[] {
   const events: CombatEvent[] = []
   // A hidden attacker gives its position away with the attack.
@@ -128,13 +246,15 @@ export function resolveAttack(
   if (attack.autoHit) {
     const dealt = rollDamage(rng, attack.damage, false).total
     events.push({ kind: 'attack', attacker: attacker.name, target: target.name, attackName: attack.name, d20: 0, total: 0, ac: target.ac, hit: true, crit: false })
-    applyDamage(target, dealt, false, events)
+    applyDamage(target, dealt, false, events, rng)
     return events
   }
   const roll = rollD20(rng, mode)
   // Champion: crit on a lower face (lowest range across stacked effects).
   let critOn = 20
   for (const e of effectsOf(attacker)) if (e.kind === 'critRange') critOn = Math.min(critOn, e.range)
+  // Any melee hit from 5 ft on a paralyzed or unconscious creature is a crit.
+  const helplessCrit = attack.range <= 1 && chebyshev(attacker.pos, target.pos) <= 1 && isHelpless(target)
   const crit = roll.value >= critOn
   let total = roll.value + attack.toHit
   // Bardic Inspiration: an inspired attacker who would miss adds the die
@@ -156,6 +276,7 @@ export function resolveAttack(
     }
   }
   const hit = roll.nat20 || (!roll.nat1 && (total >= target.ac || crit))
+  const critical = crit || (hit && helplessCrit)
 
   events.push({
     kind: 'attack',
@@ -166,18 +287,18 @@ export function resolveAttack(
     total,
     ac: target.ac,
     hit,
-    crit,
+    crit: critical,
   })
 
   if (!hit) {
     // Evoker Potent Cantrip (simplified): a missed cantrip still deals half.
     if (attack.source === 'cantrip' && findEffect(attacker, 'potentCantrip')) {
       const half = Math.floor(rollDamage(rng, attack.damage, false).total / 2)
-      if (half > 0) applyDamage(target, half, false, events)
+      if (half > 0) applyDamage(target, half, false, events, rng)
     }
     return events
   }
-  let amount = rollDamage(rng, attack.damage, crit).total
+  let amount = rollDamage(rng, attack.damage, critical).total
   // Rage: bonus on the rager's melee hits; a raging target halves physical damage.
   if (hasCondition(attacker, 'raging') && attack.range <= 1) {
     amount += rageDamageBonus(attacker.classLevels?.barbarian ?? attacker.charLevel ?? 1)
@@ -189,17 +310,22 @@ export function resolveAttack(
   if (rogue > 0 && !attacker.sneakAttackUsed && (attack.source ?? 'weapon') === 'weapon' && mode !== 'disadvantage') {
     const flanked = battlers.some((a) => a.team === attacker.team && a.id !== attacker.id && a.hp > 0 && chebyshev(a.pos, target.pos) <= 1)
     if (mode === 'advantage' || flanked) {
-      amount += rollDamage(rng, { count: sneakAttackDice(rogue), sides: 6, bonus: 0 }, crit).total
+      amount += rollDamage(rng, { count: sneakAttackDice(rogue), sides: 6, bonus: 0 }, critical).total
       attacker.sneakAttackUsed = true
     }
   }
   // Hunter's Colossus Slayer: once per turn, +1d8 on a weapon hit vs a wounded target.
   if ((attack.source ?? 'weapon') === 'weapon' && !attacker.colossusSlayerUsed && target.hp < target.maxHp && findEffect(attacker, 'colossusSlayer')) {
-    amount += rollDamage(rng, { count: 1, sides: 8, bonus: 0 }, crit).total
+    amount += rollDamage(rng, { count: 1, sides: 8, bonus: 0 }, critical).total
     attacker.colossusSlayerUsed = true
   }
+  // Hunter's Mark: the marker's weapon hits on its quarry deal extra damage.
+  if ((attack.source ?? 'weapon') === 'weapon' && target.condSource?.marked === attacker.id) {
+    const mark = attacker.attacks.find((a) => a.control?.kind === 'mark')?.control
+    if (mark?.kind === 'mark') amount += rollDamage(rng, mark.bonus, critical).total
+  }
   if (hasCondition(target, 'raging') && physical) amount = Math.floor(amount / 2)
-  applyDamage(target, amount, crit, events)
+  applyDamage(target, amount, critical, events, rng)
   // Vampiric Touch: the caster regains half the damage dealt.
   if (attack.drain && amount > 0 && attacker.hp > 0) attacker.hp = Math.min(attacker.maxHp, attacker.hp + Math.floor(amount / 2))
   // Rider damage the target may save against for half (e.g. poison).
@@ -207,7 +333,7 @@ export function resolveAttack(
     const r = attack.rider
     const extra = rollDamage(rng, r.damage, false).total
     const saved = savingThrow(rng, target, r.save) >= r.dc
-    applyDamage(target, saved ? Math.floor(extra / 2) : extra, false, events)
+    applyDamage(target, saved ? Math.floor(extra / 2) : extra, false, events, rng)
   }
   // Vampiric elite: the attacker heals for part of the damage it dealt.
   if (attacker.affix === 'vampiric' && amount > 0 && attacker.hp > 0) {
@@ -227,6 +353,8 @@ export function resolveAttack(
     setTimedCondition(target, 'prone', 1)
     events.push({ kind: 'condition', who: target.name, condition: 'prone' })
   }
+  // Repelling Blast: shove the target away on a hit.
+  if (attack.push && map && target.hp > 0) pushAway(target, attacker.pos, attack.push, map, battlers)
   return events
 }
 
@@ -267,7 +395,9 @@ export function resolveAreaAttack(
       saved = savingThrow(rng, t, 'dex') >= dc
       t.darkOneLuckUsed = true
     }
-    applyDamage(t, saved ? Math.floor(full / 2) : full, false, events)
+    const wasUp = t.hp > 0
+    applyDamage(t, saved ? Math.floor(full / 2) : full, false, events, rng)
+    onDrop(attacker, t, wasUp)
     if (!saved && attack.applies && t.hp > 0) {
       setTimedCondition(t, attack.applies.condition, attack.applies.rounds)
       events.push({ kind: 'condition', who: t.name, condition: attack.applies.condition })
@@ -291,6 +421,7 @@ export function combatMode(attacker: Battler, target: Battler, attack: CombatAtt
   if (hasCondition(attacker, 'restrained')) dis++
   if (hasCondition(target, 'dodging')) dis++
   if (hasCondition(target, 'restrained')) adv++
+  if (isHelpless(target)) adv++
   if (hasCondition(target, 'prone')) {
     if (attack.range <= 1) adv++
     else dis++

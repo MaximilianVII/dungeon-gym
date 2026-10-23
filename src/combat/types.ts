@@ -11,7 +11,33 @@ export type Team = 'player' | 'enemy'
 
 // Minimal 5e condition set. 'raging' / 'inspired' / 'dodging' are turn/fight
 // states rather than 5e conditions, kept here so they share the same plumbing.
-export type Condition = 'prone' | 'poisoned' | 'frightened' | 'unconscious' | 'grappled' | 'restrained' | 'dodging' | 'raging' | 'inspired' | 'hidden'
+// 'paralyzed', 'unconscious' and 'incapacitated' cost the creature its turn
+// (see combat/control). 'unconscious' with HP left is magical sleep and
+// 'incapacitated' comes from Hypnotic Pattern; damage ends both.
+export type Condition = 'prone' | 'poisoned' | 'frightened' | 'unconscious' | 'paralyzed' | 'incapacitated' | 'grappled' | 'restrained' | 'dodging' | 'raging' | 'inspired' | 'hidden' | 'marked'
+
+/** SRD creature types the spells care about (Hold Person, Sleep). */
+export type CreatureType = 'humanoid' | 'undead' | 'beast' | 'giant' | 'monstrosity'
+
+/** A spell whose effect is not damage (see combat/control). */
+export type ControlEffect =
+  /** Hold Person: a creature of `creatureType` saves (`save`) or is paralyzed;
+   *  it repeats the save at the end of each of its turns. Concentration. */
+  | { kind: 'hold'; save: Ability; creatureType: CreatureType }
+  /** Sleep: `pool` HP of creatures in a `radius`-tile burst fall unconscious,
+   *  lowest current HP first; undead are immune. No save. */
+  | { kind: 'sleep'; pool: DamageDice; radius: number }
+  /** Conjure Animals: `count` copies of the SRD beast `beast` fight on the
+   *  caster's side until the fight ends or concentration drops. */
+  | { kind: 'conjure'; beast: string; count: number }
+  /** Hypnotic Pattern: creatures in a `radius`-tile burst save (`save`) or are
+   *  incapacitated until they take damage (charmed, speed 0). Not selective.
+   *  Concentration. */
+  | { kind: 'pattern'; save: Ability; radius: number }
+  /** Hunter's Mark (a bonus action): the caster's weapon hits on the marked
+   *  creature deal `bonus` extra; the mark moves on when its target drops.
+   *  Concentration. */
+  | { kind: 'mark'; bonus: DamageDice }
 
 export interface CombatAttack {
   name: string
@@ -31,6 +57,9 @@ export interface CombatAttack {
   slotLevel?: number
   /** For a 'heal' action: HP restored (dice already include the casting mod). */
   heal?: DamageDice
+  /** Cast as a bonus action (Healing Word); the action that turn may then only
+   *  be a cantrip or a weapon attack (SRD). */
+  bonusAction?: boolean
   /** On a hit, inflict this condition on the target for a number of rounds. */
   applies?: { condition: Condition; rounds: number }
   /**
@@ -48,6 +77,17 @@ export interface CombatAttack {
   /** Extra damage on a hit that the target may save against for half
    *  (e.g. a giant spider's poison: 2d8, CON DC 11). */
   rider?: { damage: DamageDice; damageType: string; save: Ability; dc: number }
+  /** A control spell (no damage roll); see ControlEffect. */
+  control?: ControlEffect
+  /** On a hit, push the target this many tiles straight away from the
+   *  attacker (Repelling Blast); walls and creatures stop it. */
+  push?: number
+  /** SRD "At Higher Levels": dice added (to damage, or to healing) per slot
+   *  level above the spell's own. */
+  upcast?: DamageDice
+  /** Separate rays/beams (Scorching Ray 3, Eldritch Blast 1 per cantrip die):
+   *  each is its own attack roll for an equal share of the dice, bonus and push. */
+  beams?: number
 }
 
 /** The six abilities, by short name. */
@@ -98,6 +138,24 @@ export interface Battler {
   /** Saving-throw bonuses (players: ability mod + proficiency); missing = DEX
    *  from initiativeMod, others +0. */
   saves?: Partial<Record<Ability, number>>
+  /** Temporary hit points: lost before real HP, never stacked (the higher
+   *  value is kept), gone after a long rest. */
+  tempHp?: number
+  /** Ability modifiers (players), for features that scale with one. */
+  abilityMods?: Partial<Record<Ability, number>>
+  /** SRD creature type (monsters); players are humanoids. */
+  creatureType?: CreatureType
+  /** Id of the caster whose Conjure Animals brought this beast in: it fights on
+   *  the caster's side, has no death saves and vanishes at 0 HP. */
+  summoner?: string
+  /** The concentration spell this caster keeps up (Hold Person, Conjure Animals). */
+  concentration?: string
+  /** Who imposed a condition that lasts only while they concentrate
+   *  (condition → caster id). */
+  condSource?: Record<string, string>
+  /** Conditions that end on a successful save at the end of each of the
+   *  creature's turns (condition → save). */
+  saveEnds?: Record<string, { ability: Ability; dc: number }>
   /** Passive Perception (enemies; a hiding rogue must beat it). */
   passivePerception?: number
   /** Names of Recharge attacks used and not yet recharged. */
@@ -170,10 +228,28 @@ export function isDown(b: Battler): boolean {
   return b.hp <= 0
 }
 
-/** A combatant is out of the fight if an enemy at 0 HP, or a dead player. */
+/** Does this battler roll death saves at 0 HP? Only party members — enemies
+ *  and conjured beasts simply drop. */
+export function makesDeathSaves(b: Battler): boolean {
+  return b.team === 'player' && b.summoner === undefined
+}
+
+/** A combatant is out of the fight if an enemy or summon at 0 HP, or a dead player. */
 export function isOutOfFight(b: Battler): boolean {
-  if (b.team === 'enemy') return b.hp <= 0
+  if (!makesDeathSaves(b)) return b.hp <= 0
   return b.deathSaves?.dead === true
+}
+
+/** Restore HP (capped at max). A creature brought up from 0 HP regains
+ *  consciousness (SRD); returns the HP actually restored. */
+export function healBattler(b: Battler, amount: number): number {
+  const before = Math.max(0, b.hp)
+  b.hp = Math.min(b.maxHp, before + Math.max(0, amount))
+  if (before <= 0 && b.hp > 0) {
+    removeCondition(b, 'unconscious')
+    if (b.deathSaves) b.deathSaves = { ...b.deathSaves, successes: 0, failures: 0, stable: false }
+  }
+  return b.hp - before
 }
 
 export function hasCondition(b: Battler, c: Condition): boolean {

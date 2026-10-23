@@ -10,6 +10,8 @@ export interface EnemySpawn {
   /** Monster key (see combat/monsters). */
   key: string
   pos: Vec2
+  /** Encounter group: spawns sharing it are met (and fought) together. */
+  group: number
 }
 
 export interface Level {

@@ -3,4 +3,4 @@
  * outcome for a given (seed, genome) — combat math, generator, policy, reward —
  * because stored benchmark scores are only comparable within one version.
  */
-export const CORE_VERSION = '0.3.0'
+export const CORE_VERSION = '0.4.0'

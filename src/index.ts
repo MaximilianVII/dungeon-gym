@@ -20,7 +20,8 @@ export {
   createRun, stepRun, runToEnd, playRun, isRunDone, runResult, runSnapshot, cloneRunState, equipFoundGear,
   type RunConfig, type RunState, type RunResult, type MemberResult, type RunSnapshot, type PartyMemberInit, type EndReason, type RunPhase, type DeathCause, type GearSlot,
 } from './bot/run'
-export { botPlayerTurn, type TurnKind } from './bot/policy'
+export { botPlayerTurn, type TurnKind, type TurnContext } from './bot/policy'
+export { planControl, incomingDamage, type ControlPlan, type ControlOptions } from './bot/tactics'
 export { maxResources, restoreResources, rageUses, bardicDie, type ClassResources } from './combat/abilities'
 export { DEFAULT_REWARD, BENCHMARK_REWARD, REWARD_PRESETS, clampReward, memberFitness, diversityBonus, type RewardConfig, type FitnessInput } from './bot/reward'
 export { mergeUsage, type UsageTally } from './bot/usage'
@@ -51,4 +52,9 @@ export { ARTIFACTS, DEFAULT_LOOT_WEIGHTS, effectScore, pickArtifact, type Artifa
 export { GEAR, type GearItem } from './items/gear'
 export { SUBCLASS_CATALOGUE } from './combat/subclasses'
 export { SPELL_NAMES } from './combat/spells'
-export type { Battler, CombatAttack, Condition } from './combat/types'
+export type { Battler, CombatAttack, Condition, ControlEffect, CreatureType } from './combat/types'
+export {
+  MINUTE_ROUNDS, castControl, isIncapacitated, isDormant, sleepVictims, sleepPool, conjureCount, holdTargetCount, canHold, patternTargets, markedBy,
+  type ControlAim,
+} from './combat/control'
+export { castingLevel, slotAvailable, upcast, naturalRecovery } from './combat/slots'

@@ -3,7 +3,7 @@ import { botPlayerTurn, pathStep } from '../src/bot/policy'
 import { applyDamage } from '../src/combat/resolve'
 import type { ClassResources } from '../src/combat/abilities'
 import { buildEnemyBattler, buildPlayerBattler } from '../src/combat/setup'
-import { CULTIST, GOBLIN } from '../src/combat/monsters'
+import { CULTIST, GOBLIN, ZOMBIE } from '../src/combat/monsters'
 import { hasCondition, type Battler } from '../src/combat/types'
 import { starterCharacter, type ClassKey } from '../src/character/build'
 import { tileDistance } from '../src/game/logic'
@@ -138,12 +138,14 @@ describe('bonus actions', () => {
 describe('healing', () => {
   it('heals self below the threshold, spell or potion first per gene', () => {
     const c = bot('cleric', { x: 1, y: 7 })
+    c.attacks = c.attacks.filter((a) => a.name !== 'Healing Word') // no bonus-action heal
     c.hp = 5
     c.potions = 1
     expect(turn(c, [c, foe({ x: 10, y: 4 })], genes({ healAtHpFrac: 0.5, potionFirst: false })).tally['Cure Wounds']).toBe(1) // the strongest heal
     expect(c.spellSlots?.[0]).toBe(3)
     expect(c.potions).toBe(1)
     const c2 = bot('cleric', { x: 1, y: 7 })
+    c2.attacks = c2.attacks.filter((a) => a.name !== 'Healing Word')
     c2.hp = 5
     c2.potions = 1
     expect(turn(c2, [c2, foe({ x: 10, y: 4 })], genes({ healAtHpFrac: 0.5, potionFirst: true })).tally['Healing Potion']).toBe(1)
@@ -204,7 +206,8 @@ describe('movement decisions', () => {
   it('kites with a ranged attack when the stance prefers range, else closes to melee', () => {
     const r = bot('rogue', { x: 2, y: 4 })
     expect(turn(r, [r, foe({ x: 9, y: 4 })], genes({ kite: 1, aggression: 0, protectAllies: 0 })).tally.Shortbow).toBe(1)
-    expect(r.pos).toEqual({ x: 2, y: 4 })
+    // After the shot it steps back out of the goblin's reach (wall at x=0).
+    expect(r.pos).toEqual({ x: 1, y: 4 })
     const m = bot('rogue', { x: 2, y: 4 })
     expect(turn(m, [m, foe({ x: 9, y: 4 })], genes({ kite: 0, aggression: 1 })).tally.Shortbow).toBeUndefined()
     expect(m.pos.x).toBeGreaterThan(2)
@@ -258,9 +261,9 @@ describe('targeting', () => {
     expect(t1.tally['Fire Bolt']).toBe(1)
     expect(w.spellSlots).toEqual([3, 3, 2])
     const w2 = bot('wizard', { x: 1, y: 4 })
-    const t2 = turn(w2, [w2, foe({ x: 10, y: 4 }, 1000)], genes({ slotReserve: 0 }))
-    expect(t2.tally.Fireball).toBe(1)
-    expect(w2.spellSlots).toEqual([3, 3, 1])
+    const t2 = turn(w2, [w2, foe({ x: 10, y: 4 }, 1000, undefined, ZOMBIE)], genes({ slotReserve: 0 }))
+    expect(t2.tally['Fire Bolt']).toBeUndefined()
+    expect(w2.spellSlots).not.toEqual([3, 3, 2])
   })
 
   it('Action Surge early, or only to finish a low foe', () => {

@@ -92,11 +92,12 @@ measures runs per second and `report` prints the balance telemetry
 |---|---|
 | `src/rng.ts` | serializable mulberry32 RNG |
 | `src/game/`, `src/dungeon/` | grid, line of sight, procedural levels, XP |
-| `src/combat/` | dice, attack resolution, monsters, spells, subclasses, multiclassing, enemy and boss AI |
+| `src/combat/` | dice, attack resolution, monsters, spells, control spells and concentration, spell slots, subclasses, multiclassing, monster and boss AI |
 | `src/character/` | SRD-table character builder and the 12 starting characters |
-| `src/bot/` | genome schema, bot combat policy, the run state machine, reward |
+| `src/bot/` | genome schema, bot combat policy and tactics, the run state machine, reward |
 | `src/train/` | evaluation, benchmark, trainer, hall of fame |
 | `docs/genome-audit.md` | audit of the legacy genome/learning logic and what changed |
+| `docs/balance.md` | per-class benchmark and telemetry across rules versions |
 
 ## Determinism contract
 

@@ -215,6 +215,11 @@ export function spellsForBuild(classLevels: Record<string, number>, abilityScore
       if (cls === 'warlock' && lvl >= 2 && atk.name === 'Eldritch Blast') {
         atk.damage = { ...atk.damage, bonus: atk.damage.bonus + castMod * atk.damage.count }
       }
+      // One beam per cantrip die, each its own attack roll (SRD).
+      if (atk.name === 'Eldritch Blast' && atk.damage.count > 1) atk.beams = atk.damage.count
+      // Repelling Blast (the third invocation, warlock 5+): each beam that hits
+      // pushes the target 10 ft (2 tiles) away.
+      if (cls === 'warlock' && lvl >= 5 && atk.name === 'Eldritch Blast') atk.push = 2 * atk.damage.count
       const prev = byName.get(atk.name)
       if (!prev || atk.toHit > prev.toHit) byName.set(atk.name, atk)
     }

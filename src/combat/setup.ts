@@ -1,6 +1,6 @@
 import type { Vec2 } from '../game/types'
 import { rollD20, type Rng } from './dice'
-import type { Ability, Battler, CombatAttack, CombatEvent } from './types'
+import type { Ability, Battler, CombatAttack, CombatEvent, ControlEffect } from './types'
 import type { MonsterBlock } from './monsters'
 import { rollAffix, applyAffix } from './affixes'
 import { effectsOf, getSubclass } from './subclasses'
@@ -57,12 +57,24 @@ export interface PlayerSource {
   hp?: number
 }
 
+function cloneControl(c: ControlEffect): ControlEffect {
+  if (c.kind === 'sleep') return { ...c, pool: { ...c.pool } }
+  if (c.kind === 'mark') return { ...c, bonus: { ...c.bonus } }
+  return { ...c }
+}
+
 /** Deep copy of an attack (battlers must never share objects with a source). */
 export function cloneAttack(a: CombatAttack): CombatAttack {
   const out: CombatAttack = { ...a, damage: { ...a.damage } }
   if (a.heal) out.heal = { ...a.heal }
   if (a.applies) out.applies = { ...a.applies }
+  if (a.control) out.control = cloneControl(a.control)
   return out
+}
+
+function abilityModsOf(s: AbilityScores): Record<Ability, number> {
+  const mod = (v: number): number => Math.floor((v - 10) / 2)
+  return { str: mod(s.str), dex: mod(s.dex), con: mod(s.con), int: mod(s.int), wis: mod(s.wis), cha: mod(s.cha) }
 }
 
 function tiles(speedFt: number): number {
@@ -112,6 +124,7 @@ export function buildPlayerBattler(src: PlayerSource, pos: Vec2): Battler {
     resources: maxResources(src.classLevels, src.abilityScores.cha),
     classLevels: { ...src.classLevels },
     charLevel,
+    abilityMods: abilityModsOf(src.abilityScores),
   }
   if (src.subclass) battler.subclass = src.subclass
   if (src.saves) battler.saves = { ...src.saves }
@@ -160,6 +173,7 @@ export function buildEnemyBattler(monster: MonsterBlock, id: string, pos: Vec2, 
     attacksPerAction: Math.max(1, monster.attacksPerAction ?? 1),
     conditions: [],
     passivePerception: monster.passivePerception,
+    creatureType: monster.type,
   }
   if (monster.role) battler.role = monster.role
   // Boss telegraph: build the depth-scaled AoE this boss winds up + bursts.

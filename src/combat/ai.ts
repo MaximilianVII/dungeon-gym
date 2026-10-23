@@ -6,8 +6,8 @@ import { hasCondition, type Battler, type CombatAttack } from './types'
 import type { DamageDice } from './dice'
 
 // ---------------------------------------------------------------------------
-// Enemy AI (deliberately simple). On its turn an enemy: picks the nearest living
-// player, steps toward it (greedy, diagonal = 1, up to its movement budget,
+// Monster AI (deliberately simple). On its turn a monster: picks the nearest
+// living creature of the OTHER team (so conjured beasts use it too), steps toward it (greedy, diagonal = 1, up to its movement budget,
 // avoiding walls and occupied tiles), and attacks if a target is in range —
 // melee when adjacent, otherwise a ranged attack if it has one.
 //
@@ -71,7 +71,7 @@ function chooseAttack(enemy: Battler, dist: number, hasLos: boolean): CombatAtta
 }
 
 export function planEnemyTurn(enemy: Battler, battlers: Battler[], map: GameMap): EnemyPlan {
-  const targets = battlers.filter((b) => b.team === 'player' && b.hp > 0)
+  const targets = battlers.filter((b) => b.team !== enemy.team && b.hp > 0)
   if (targets.length === 0) return { moves: [], finalPos: { ...enemy.pos } }
 
   // HEALER: if a wounded ally (its own team, itself included) is within reach,
@@ -80,7 +80,7 @@ export function planEnemyTurn(enemy: Battler, battlers: Battler[], map: GameMap)
     let ally: Battler | undefined
     let worstFrac = 1
     for (const a of battlers) {
-      if (a.team !== 'enemy' || a.hp <= 0 || a.hp >= a.maxHp) continue
+      if (a.team !== enemy.team || a.hp <= 0 || a.hp >= a.maxHp) continue
       if (tileDistance(enemy.pos, a.pos) > 6) continue
       const frac = a.hp / a.maxHp
       if (frac < worstFrac) {
@@ -94,7 +94,7 @@ export function planEnemyTurn(enemy: Battler, battlers: Battler[], map: GameMap)
     // No one to heal → fall through and attack like anyone else.
   }
 
-  // Nearest living player.
+  // Nearest living foe.
   let target = targets[0]
   let best = tileDistance(enemy.pos, target.pos)
   for (const tcand of targets) {

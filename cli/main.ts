@@ -185,8 +185,8 @@ async function speed(args: Args): Promise<void> {
 
 /** Telemetry table of the baseline genomes on the benchmark (docs/balance.md). */
 function report(): void {
-  log('| class | score | wins | depth | char lvl | fights | idle / retreat turns | surprised turns | slots | potions | top killers |')
-  log('|---|---|---|---|---|---|---|---|---|---|---|')
+  log('| class | score | wins | depth | char lvl | fights | foes / fight | idle / retreat turns | surprised turns | slots | potions | top killers |')
+  log('|---|---|---|---|---|---|---|---|---|---|---|---|')
   for (const c of CLASS_KEYS) {
     const party = [{ genome: baselineGenome(c) }]
     const rs = BENCHMARK.seeds.map((seed) => playRun({ seed, depth: BENCHMARK.depth, party }).members[0])
@@ -197,7 +197,7 @@ function report(): void {
     for (const m of rs) if (m.stats.killedBy) killers[m.stats.killedBy] = (killers[m.stats.killedBy] ?? 0) + 1
     const top = Object.entries(killers).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `${k} ${v}`).join(', ')
     const score = mean(rs.map((m) => m.depthReached * 12 + (m.won ? 40 : 0) + (m.alive ? 15 : -30) + m.charLevel))
-    log(`| ${c} | ${score.toFixed(1)} | ${rs.filter((m) => m.won).length} | ${(sum((m) => m.depthReached) / n).toFixed(1)} | ${(sum((m) => m.charLevel) / n).toFixed(1)} | ${(sum((m) => m.stats.fights) / n).toFixed(1)} | ${(100 * sum((m) => m.stats.idleTurns) / turns).toFixed(0)}% / ${(100 * sum((m) => m.stats.retreatTurns) / turns).toFixed(0)}% | ${(100 * sum((m) => m.stats.surprisedTurns) / (turns + sum((m) => m.stats.surprisedTurns))).toFixed(0)}% | ${(sum((m) => m.stats.slotsSpent) / n).toFixed(1)} | ${(sum((m) => m.stats.potionsUsed) / n).toFixed(2)} | ${top} |`)
+    log(`| ${c} | ${score.toFixed(1)} | ${rs.filter((m) => m.won).length} | ${(sum((m) => m.depthReached) / n).toFixed(1)} | ${(sum((m) => m.charLevel) / n).toFixed(1)} | ${(sum((m) => m.stats.fights) / n).toFixed(1)} | ${(sum((m) => m.stats.foesFaced) / Math.max(1, sum((m) => m.stats.fights))).toFixed(2)} | ${(100 * sum((m) => m.stats.idleTurns) / turns).toFixed(0)}% / ${(100 * sum((m) => m.stats.retreatTurns) / turns).toFixed(0)}% | ${(100 * sum((m) => m.stats.surprisedTurns) / (turns + sum((m) => m.stats.surprisedTurns))).toFixed(0)}% | ${(sum((m) => m.stats.slotsSpent) / n).toFixed(1)} | ${(sum((m) => m.stats.potionsUsed) / n).toFixed(2)} | ${top} |`)
   }
 }
 

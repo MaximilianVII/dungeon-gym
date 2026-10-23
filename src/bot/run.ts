@@ -10,6 +10,8 @@ import { planEnemyTurn } from '../combat/ai'
 import { bossTurn } from '../combat/boss'
 import { canTakeLevelIn, hitDieOf } from '../combat/multiclass'
 import { isOutOfFight, removeCondition, type Battler, type CombatAttack } from '../combat/types'
+import { endOfTurnSaves, enforceConcentration, isIncapacitated } from '../combat/control'
+import { naturalRecovery } from '../combat/slots'
 import { generateLevelForRun, RUN_LENGTH } from '../dungeon/generate'
 import type { Level } from '../dungeon/levels'
 import { applyXp, monsterXp } from '../dungeon/leveling'
@@ -19,8 +21,9 @@ import { abilityMod, buildCharacter, starterSpec, validateCharacterSpec, type Ch
 import { casterSlots, profBonus } from '../character/progression'
 import { deriveSeed, rngOf, seedRng, type RngState } from '../rng'
 import { genomeHash, lootWeights, validateGenome, type Genes, type Genome } from './genome'
-import { botPlayerTurn } from './policy'
+import { botPlayerTurn, type TurnContext } from './policy'
 import { maxResources, restoreResources } from '../combat/abilities'
+import { findEffect } from '../combat/subclasses'
 import type { UsageTally } from './usage'
 
 // ---------------------------------------------------------------------------
@@ -91,6 +94,8 @@ interface Spawn {
   id: number
   key: string
   pos: Vec2
+  /** Encounter group (from the generator): a group is fought together. */
+  group: number
 }
 
 /** Equipment slots for found gear (a ring fits either ring slot). */
@@ -114,6 +119,8 @@ export interface MemberState {
   xp: number
   /** Hit Dice left to spend on short rests (one per character level at most). */
   hitDice: number
+  /** Circle of the Land's Natural Recovery already used since the last long rest. */
+  naturalRecoveryUsed?: boolean
   depthReached: number
   alive: boolean
   deathLevel?: number
@@ -151,6 +158,11 @@ export interface MemberStats {
 export interface CombatState {
   /** Members that started this fight (dead ones stay listed). */
   memberIds: number[]
+  /** Creatures fighting on the party's side that are not members (conjured
+   *  beasts); they leave when the fight ends. */
+  allies: Battler[]
+  /** Counter for unique ally ids within the fight. */
+  nextAllyId: number
   enemies: Battler[]
   /** Battler ids in initiative order. */
   order: string[]
@@ -238,6 +250,8 @@ export interface RunResult {
 
 export interface RunSnapshot {
   level: number
+  /** Conjured beasts fighting for the party (combat only). */
+  allies: { pos: Vec2; glyph: string; hp: number; maxHp: number }[]
   charLevel: number
   partySize: number
   phase: RunPhase
@@ -339,6 +353,7 @@ function deriveBattler(m: MemberState, prev: Battler | null, refillSlots: boolea
     b.resources = { rage: keep('rage'), secondWind: keep('secondWind'), actionSurge: keep('actionSurge'), inspiration: keep('inspiration'), wildShape: keep('wildShape') }
   }
   if (prev.inspirationDie !== undefined) b.inspirationDie = prev.inspirationDie
+  if (prev.tempHp !== undefined) b.tempHp = prev.tempHp
   return b
 }
 
@@ -437,9 +452,10 @@ function currentLevel(s: RunState): Level {
   return s.level
 }
 
-/** The fight's battlers: participating members first, then enemies (stable order). */
+/** The fight's battlers: participating members first, then allied summons,
+ *  then enemies (stable order). */
 function combatBattlers(s: RunState, c: CombatState): Battler[] {
-  return [...c.memberIds.map((id) => memberById(s, id).battler), ...c.enemies]
+  return [...c.memberIds.map((id) => memberById(s, id).battler), ...c.allies, ...c.enemies]
 }
 
 function bfsNextStep(map: GameMap, from: Vec2, goal: Vec2): Vec2 | null {
@@ -566,7 +582,7 @@ function loadLevel(s: RunState): void {
   const lvl = generateLevelForRun(s.seed, s.levelIndex, s.levelIndex === s.depth - 1, { enemyScale: s.enemyScale })
   s.level = lvl
   s.pos = { ...lvl.map.spawn }
-  s.remaining = lvl.enemies.map((e) => ({ id: s.nextSpawnId++, key: e.key, pos: { ...e.pos } }))
+  s.remaining = lvl.enemies.map((e) => ({ id: s.nextSpawnId++, key: e.key, pos: { ...e.pos }, group: e.group }))
   s.traps = lvl.traps.map((p) => ({ pos: { ...p }, armed: true }))
   s.shrines = lvl.shrines.map((p) => ({ pos: { ...p }, used: false }))
   for (const m of s.members) {
@@ -606,8 +622,9 @@ function finishRun(s: RunState, won: boolean, reason: EndReason): void {
   }
 }
 
-/** What any short rest restores besides HP: per-short-rest features and a
- *  warlock's Pact Magic slots (added back, capped at the build's full table). */
+/** What any short rest restores besides HP: per-short-rest features, a
+ *  warlock's Pact Magic slots (added back, capped at the build's full table)
+ *  and, once per long rest, a Land druid's Natural Recovery. */
 function restoreShortRestFeatures(m: MemberState): void {
   const b = m.battler
   const cha = m.spec.abilityScores.cha
@@ -619,6 +636,11 @@ function restoreShortRestFeatures(m: MemberState): void {
     const slots = [...(b.spellSlots ?? [])]
     for (let i = 0; i < pact.length; i++) slots[i] = Math.min(full[i] ?? 0, (slots[i] ?? 0) + pact[i])
     b.spellSlots = slots
+  }
+  if (!m.naturalRecoveryUsed && findEffect(b, 'naturalRecovery')) {
+    const nr = naturalRecovery(b.spellSlots ?? [], buildCharacter(m.spec).spellSlots, m.spec.classLevels.druid ?? 0)
+    b.spellSlots = nr.slots
+    m.naturalRecoveryUsed = nr.recovered
   }
 }
 
@@ -634,6 +656,8 @@ function restParty(s: RunState, long: boolean): void {
       b.spellSlots = [...buildCharacter(m.spec).spellSlots]
       b.resources = maxResources(m.spec.classLevels, m.spec.abilityScores.cha)
       m.hitDice = Math.min(level, m.hitDice + Math.max(1, Math.floor(level / 2)))
+      m.naturalRecoveryUsed = false
+      delete b.tempHp
       continue
     }
     b.hp = Math.max(b.hp, Math.floor(b.maxHp * 0.75))
@@ -770,8 +794,9 @@ function partyIsSurprised(s: RunState, spotter: Spawn, rng: Rng): boolean {
 
 function startCombat(s: RunState, spotter: Spawn, rng: Rng): void {
   const map = currentLevel(s).map
+  // The spotter's whole group joins, plus anyone else close by in sight.
   const engaged = s.remaining.filter(
-    (e) => e.id === spotter.id || (tileDistance(s.pos, e.pos) <= ENGAGE_RADIUS && lineOfSight(map, e.pos, s.pos)),
+    (e) => e.group === spotter.group || (tileDistance(s.pos, e.pos) <= ENGAGE_RADIUS && lineOfSight(map, e.pos, s.pos)),
   )
   const alive = aliveMembers(s)
   const spots = spreadPositions(map, s.pos, alive.length, new Set(engaged.map((e) => `${e.pos.x},${e.pos.y}`)))
@@ -781,6 +806,9 @@ function startCombat(s: RunState, spotter: Spawn, rng: Rng): void {
     b.conditions = []
     b.condTimers = {}
     b.deathSaves = { successes: 0, failures: 0, stable: false, dead: false }
+    delete b.concentration
+    delete b.condSource
+    delete b.saveEnds
     // Once-per-fight features refresh with every fight.
     b.darkOneLuckUsed = false
     endWildShape(b)
@@ -793,6 +821,8 @@ function startCombat(s: RunState, spotter: Spawn, rng: Rng): void {
     .filter((b): b is Battler => b !== null)
   const combat: CombatState = {
     memberIds: alive.map((m) => m.memberId),
+    allies: [],
+    nextAllyId: 0,
     enemies,
     order: [],
     turn: 0,
@@ -822,6 +852,31 @@ function gotoNext(c: CombatState): void {
 function monsterKeyOf(enemy: Battler): string {
   const i = enemy.id.lastIndexOf('-')
   return i > 0 ? enemy.id.slice(0, i) : enemy.id
+}
+
+/** A conjured beast's turn (monster AI against the enemies); its damage and
+ *  kills count for the member who summoned it. */
+function runSummonTurn(s: RunState, beast: Battler, battlers: Battler[], rng: Rng): void {
+  const before = sumHp(battlers, 'enemy')
+  const upBefore = enemiesUp(battlers)
+  enemyAct(s, beast, battlers, rng)
+  const owner = s.members.find((m) => m.battler.id === beast.summoner)
+  if (!owner) return
+  owner.damage += Math.max(0, before - sumHp(battlers, 'enemy'))
+  owner.kills += Math.max(0, upBefore - enemiesUp(battlers))
+}
+
+/** The turn context a member's bot gets: summoned beasts join the fight and
+ *  act right after their summoner, from this round on. */
+function turnContext(c: CombatState): TurnContext {
+  return {
+    summonId: (i) => `ally-${c.nextAllyId + i}`,
+    addSummons: (beasts) => {
+      c.nextAllyId += beasts.length
+      c.allies.push(...beasts)
+      c.order.splice(c.turn + 1, 0, ...beasts.map((b) => b.id))
+    },
+  }
 }
 
 function runEnemyTurn(s: RunState, enemy: Battler, battlers: Battler[], rng: Rng): void {
@@ -859,18 +914,21 @@ function enemyAct(s: RunState, enemy: Battler, battlers: Battler[], rng: Rng): v
       const swings = atk.recharge ? 1 : Math.max(1, enemy.attacksPerAction)
       for (let i = 0; i < swings; i++) {
         if (target.hp <= 0) break
-        resolveAttack(rng, enemy, atk, target, mode)
+        resolveAttack(rng, enemy, atk, target, mode, battlers)
       }
       if (atk.recharge) enemy.spent = [...(enemy.spent ?? []), atk.name]
     }
   }
 }
 
-/** Win when all enemies are down; lose when no party member is still in it
- *  (a downed member rolling death saves still counts). */
+/** Win when all enemies are down; lose when no one on the party's side can
+ *  still act or come back: every member is dead or down-and-stable (a member
+ *  still rolling death saves may roll a 20) and no summoned beast is left. */
 function outcome(battlers: Battler[]): 'won' | 'lost' | 'ongoing' {
   if (!battlers.some((b) => b.team === 'enemy' && b.hp > 0)) return 'won'
-  if (!battlers.some((b) => b.team === 'player' && b.deathSaves && !b.deathSaves.dead)) return 'lost'
+  const inIt = (b: Battler): boolean =>
+    b.team === 'player' && (b.summoner !== undefined ? b.hp > 0 : !!b.deathSaves && !b.deathSaves.dead && (b.hp > 0 || !b.deathSaves.stable))
+  if (!battlers.some(inIt)) return 'lost'
   return 'ongoing'
 }
 
@@ -903,6 +961,7 @@ function finishCombat(s: RunState, won: boolean, rng: Rng): void {
     if (mon && killed) gain += monsterXp(mon.maxHp, mon.role)
   }
   for (const m of aliveMembers(s)) {
+    delete m.battler.concentration
     // Downed-but-not-dead survivors stabilise at 1 HP.
     if (m.battler.hp <= 0 && m.battler.deathSaves && !m.battler.deathSaves.dead) m.battler.hp = 1
     removeCondition(m.battler, 'unconscious')
@@ -932,8 +991,9 @@ function finishCombat(s: RunState, won: boolean, rng: Rng): void {
   s.phase = 'explore'
 }
 
+/** Total HP of a side (summoned beasts excluded: they are not party HP). */
 function sumHp(battlers: Battler[], team: 'player' | 'enemy'): number {
-  return battlers.reduce((sum, b) => (b.team === team ? sum + Math.max(0, b.hp) : sum), 0)
+  return battlers.reduce((sum, b) => (b.team === team && b.summoner === undefined ? sum + Math.max(0, b.hp) : sum), 0)
 }
 
 function enemiesUp(battlers: Battler[]): number {
@@ -951,13 +1011,14 @@ function syncDeaths(s: RunState, c: CombatState): void {
 function combatStep(s: RunState, c: CombatState, rng: Rng, decide: Rng): void {
   syncDeaths(s, c)
   const battlers = combatBattlers(s, c)
+  enforceConcentration(battlers)
   const o = outcome(battlers)
   if (o !== 'ongoing') {
     finishCombat(s, o === 'won', rng)
     return
   }
   if (c.round > COMBAT_ROUND_CAP) {
-    finishCombat(s, battlers.some((b) => b.team === 'player' && b.hp > 0), rng)
+    finishCombat(s, c.memberIds.some((id) => memberById(s, id).battler.hp > 0), rng)
     return
   }
   const actor = battlers.find((b) => b.id === c.order[c.turn])
@@ -965,10 +1026,14 @@ function combatStep(s: RunState, c: CombatState, rng: Rng, decide: Rng): void {
     gotoNext(c)
     return
   }
-  if (actor.team === 'enemy') {
+  if (actor.team === 'enemy' || actor.summoner !== undefined) {
     removeCondition(actor, 'dodging')
     tickConditions(actor)
-    runEnemyTurn(s, actor, battlers, rng)
+    if (!isIncapacitated(actor)) {
+      if (actor.summoner !== undefined) runSummonTurn(s, actor, battlers, rng)
+      else runEnemyTurn(s, actor, battlers, rng)
+    }
+    endOfTurnSaves(rng, actor)
     gotoNext(c)
     return
   }
@@ -991,6 +1056,11 @@ function combatStep(s: RunState, c: CombatState, rng: Rng, decide: Rng): void {
   }
   removeCondition(actor, 'dodging')
   tickConditions(actor)
+  if (isIncapacitated(actor)) {
+    endOfTurnSaves(rng, actor)
+    gotoNext(c)
+    return
+  }
   // Bonus-action item: fire a held cast-wand at the weakest foe.
   if (s.castCharges > 0) {
     const foes = battlers.filter((b) => b.team === 'enemy' && b.hp > 0)
@@ -1009,7 +1079,7 @@ function combatStep(s: RunState, c: CombatState, rng: Rng, decide: Rng): void {
   const upBefore = enemiesUp(battlers)
   const slotsBefore = (actor.spellSlots ?? []).reduce((a, b) => a + b, 0)
   const potionsBefore = actor.potions ?? 0
-  const kind = botPlayerTurn(actor, battlers, currentLevel(s).map, rng, decide, member.genes, member.usage)
+  const kind = botPlayerTurn(actor, battlers, currentLevel(s).map, rng, decide, member.genes, member.usage, turnContext(c))
   member.stats.turns++
   if (kind === 'move' || kind === 'idle') member.stats.idleTurns++
   if (kind === 'retreat') member.stats.retreatTurns++
@@ -1018,6 +1088,7 @@ function combatStep(s: RunState, c: CombatState, rng: Rng, decide: Rng): void {
   member.damage += Math.max(0, enemyHpBefore - sumHp(battlers, 'enemy'))
   member.healing += Math.max(0, sumHp(battlers, 'player') - partyHpBefore)
   member.kills += Math.max(0, upBefore - enemiesUp(battlers))
+  endOfTurnSaves(rng, actor)
   gotoNext(c)
 }
 
@@ -1154,13 +1225,17 @@ export function runResult(s: RunState): RunResult {
 export function runSnapshot(s: RunState): RunSnapshot {
   const map = s.level ? s.level.map : null
   let enemies: RunSnapshot['enemies'] = []
+  let allies: RunSnapshot['allies'] = []
+  const view = (b: Battler): RunSnapshot['enemies'][number] => ({ pos: { ...b.pos }, glyph: b.glyph, hp: b.hp, maxHp: b.maxHp })
   if (s.phase === 'combat' && s.combat) {
-    enemies = s.combat.enemies.filter((b) => b.hp > 0).map((b) => ({ pos: { ...b.pos }, glyph: b.glyph, hp: b.hp, maxHp: b.maxHp }))
+    enemies = s.combat.enemies.filter((b) => b.hp > 0).map(view)
+    allies = s.combat.allies.filter((b) => b.hp > 0).map(view)
   } else if (map) {
     enemies = s.remaining.map((e) => ({ pos: { ...e.pos }, glyph: getMonster(e.key)?.glyph ?? '?', hp: 1, maxHp: 1 }))
   }
   return {
     level: s.levelIndex + 1,
+    allies,
     charLevel: s.members.reduce((mx, m) => Math.max(mx, charLevelOf(m.spec.classLevels)), 1),
     partySize: s.members.length,
     phase: s.phase,

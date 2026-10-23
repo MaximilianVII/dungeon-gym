@@ -1,4 +1,4 @@
-import type { CombatAttack } from './types'
+import type { CombatAttack, CreatureType } from './types'
 import { deepFreeze } from '../freeze'
 
 // ---------------------------------------------------------------------------
@@ -23,6 +23,8 @@ export interface MonsterBlock {
   key: string
   name: string
   glyph: string
+  /** SRD creature type (Hold Person needs a humanoid; Sleep spares undead). */
+  type: CreatureType
   maxHp: number
   ac: number
   /** Speed in feet (converted to tiles at setup: ft / 5). */
@@ -47,6 +49,7 @@ export const GOBLIN: MonsterBlock = {
   key: 'goblin',
   name: 'Goblin',
   glyph: 'g',
+  type: 'humanoid',
   maxHp: 7,
   ac: 15, // leather armor + shield
   speed: 30,
@@ -63,6 +66,7 @@ export const SKELETON: MonsterBlock = {
   key: 'skeleton',
   name: 'Skeleton',
   glyph: 's',
+  type: 'undead',
   maxHp: 13,
   ac: 13, // armor scraps
   speed: 30,
@@ -79,6 +83,7 @@ export const KOBOLD: MonsterBlock = {
   key: 'kobold',
   name: 'Kobold',
   glyph: 'k',
+  type: 'humanoid',
   maxHp: 5,
   ac: 12,
   speed: 30,
@@ -96,6 +101,7 @@ export const BANDIT: MonsterBlock = {
   key: 'bandit',
   name: 'Bandit',
   glyph: 'b',
+  type: 'humanoid',
   maxHp: 11,
   ac: 12,
   speed: 30,
@@ -113,6 +119,7 @@ export const ORC: MonsterBlock = {
   key: 'orc',
   name: 'Orc',
   glyph: 'o',
+  type: 'humanoid',
   maxHp: 15,
   ac: 13,
   speed: 30,
@@ -127,6 +134,7 @@ export const ZOMBIE: MonsterBlock = {
   key: 'zombie',
   name: 'Zombie',
   glyph: 'z',
+  type: 'undead',
   maxHp: 22,
   ac: 8,
   speed: 20, // shambling — 4 tiles
@@ -141,6 +149,7 @@ export const DIRE_WOLF: MonsterBlock = {
   key: 'dire-wolf',
   name: 'Dire Wolf',
   glyph: 'w',
+  type: 'beast',
   maxHp: 22,
   ac: 14,
   speed: 50, // fast — 10 tiles
@@ -155,6 +164,7 @@ export const CULTIST: MonsterBlock = {
   key: 'cultist',
   name: 'Cult Adept',
   glyph: 'c',
+  type: 'humanoid',
   maxHp: 13,
   ac: 12,
   speed: 30,
@@ -172,6 +182,7 @@ export const ACOLYTE: MonsterBlock = {
   key: 'acolyte',
   name: 'Acolyte',
   glyph: 'a',
+  type: 'humanoid',
   maxHp: 13,
   ac: 11,
   speed: 30,
@@ -189,6 +200,7 @@ export const OGRE: MonsterBlock = {
   key: 'ogre',
   name: 'Ogre',
   glyph: 'O',
+  type: 'giant',
   maxHp: 40,
   ac: 11,
   speed: 40,
@@ -203,6 +215,7 @@ export const GIANT_SPIDER: MonsterBlock = {
   key: 'giant-spider',
   name: 'Giant Spider',
   glyph: 'x',
+  type: 'beast',
   maxHp: 26,
   ac: 14,
   speed: 40,
@@ -222,6 +235,7 @@ export const ORC_WARLORD: MonsterBlock = {
   key: 'orc-warlord',
   name: 'Orc Warlord',
   glyph: 'B',
+  type: 'humanoid',
   maxHp: 60,
   ac: 16,
   speed: 30,
@@ -247,6 +261,7 @@ export const HOBGOBLIN: MonsterBlock = {
   key: 'hobgoblin',
   name: 'Hobgoblin',
   glyph: 'h',
+  type: 'humanoid',
   maxHp: 11,
   ac: 18, // chain mail + shield
   speed: 30,
@@ -264,6 +279,7 @@ export const GNOLL: MonsterBlock = {
   key: 'gnoll',
   name: 'Gnoll',
   glyph: 'G',
+  type: 'humanoid',
   maxHp: 22,
   ac: 15,
   speed: 30,
@@ -281,6 +297,7 @@ export const BUGBEAR: MonsterBlock = {
   key: 'bugbear',
   name: 'Bugbear',
   glyph: 'B',
+  type: 'humanoid',
   maxHp: 27,
   ac: 16,
   speed: 30,
@@ -298,6 +315,7 @@ export const WIGHT: MonsterBlock = {
   key: 'wight',
   name: 'Wight',
   glyph: 'W',
+  type: 'undead',
   maxHp: 45,
   ac: 14,
   speed: 30,
@@ -316,6 +334,7 @@ export const WRAITH: MonsterBlock = {
   key: 'wraith',
   name: 'Wraith',
   glyph: 'R',
+  type: 'undead',
   maxHp: 67,
   ac: 13,
   speed: 60, // incorporeal flight — 12 tiles
@@ -330,6 +349,7 @@ export const TROLL: MonsterBlock = {
   key: 'troll',
   name: 'Troll',
   glyph: 'T',
+  type: 'giant',
   maxHp: 84,
   ac: 15,
   speed: 30,
@@ -345,6 +365,7 @@ export const HILL_GIANT: MonsterBlock = {
   key: 'hill-giant',
   name: 'Hill Giant',
   glyph: 'H',
+  type: 'giant',
   maxHp: 105,
   ac: 13,
   speed: 40,
@@ -364,6 +385,7 @@ export const SPIDER_BROODMOTHER: MonsterBlock = {
   key: 'spider-broodmother',
   name: 'Spider Broodmother',
   glyph: 'B',
+  type: 'monstrosity',
   maxHp: 72,
   ac: 15,
   speed: 40,
@@ -384,6 +406,7 @@ export const BONE_LICH: MonsterBlock = {
   key: 'bone-lich',
   name: 'Bone Lich',
   glyph: 'B',
+  type: 'undead',
   maxHp: 78,
   ac: 15,
   speed: 30,
