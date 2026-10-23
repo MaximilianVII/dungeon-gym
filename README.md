@@ -41,9 +41,9 @@ npm install file:../dungeon-gym
 ```
 
 `file:` links the folder, so build it there first (`npm ci` does, via
-`prepare`). With npm 11+ a git dependency's `prepare` may be held back by the
-install-script allowlist; approve it with `npm install-scripts approve
-dungeon-gym-core`. Trained genomes are importable as
+`prepare`). For a git dependency npm builds `dist/` while packing the checkout;
+npm 11's install-scripts notice about `dungeon-gym-core (prepare)` is harmless.
+Trained genomes are importable as
 `dungeon-gym-core/genomes/<class>.json` once the nightly workflow has produced them.
 
 ## Use the core
